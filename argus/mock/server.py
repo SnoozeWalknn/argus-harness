@@ -222,7 +222,7 @@ class MockServer:
 
     def plan(
         self, req: dict[str, Any], step: Step, n_prompt: int
-    ) -> tuple[_Gen, list[tuple[str, Any]], bool]:
+    ) -> tuple[_Gen, list[tuple[str, Any]], int]:
         """Flatten a generation into (kind, piece) tokens, applying the output limits."""
         g = self.build(req, step)
         max_tokens = req.get("max_tokens", req.get("n_predict", -1))
@@ -247,6 +247,7 @@ class MockServer:
                 arg_pieces = tokenize(tc["arguments"]) or [""]
                 if not take("tool", [(tc, p, j == 0) for j, p in enumerate(arg_pieces)]):
                     break
+        generated = len(pieces)
         if truncated:
             g.finish_reason = "length"
             # Calls cut mid-way are not parsed; their text surfaces as content, like llama-server.
@@ -262,7 +263,7 @@ class MockServer:
                     ("content", f'<tool_call>\n{{"name": "{name}", "arguments": {partial}')
                 )
             g.tool_calls = []
-        return g, pieces, truncated
+        return g, pieces, generated
 
     def cache_hit(self, prompt: list[int]) -> int:
         with self._lock:
@@ -389,8 +390,7 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
         cache_n = m.cache_hit(prompt)
-        g, pieces, _ = m.plan(req, step, len(prompt))
-        n_gen = len(pieces)
+        g, pieces, n_gen = m.plan(req, step, len(prompt))
         timings = {
             "cache_n": cache_n,
             "prompt_n": len(prompt) - cache_n,

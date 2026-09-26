@@ -171,7 +171,10 @@ class NativeProtocol(Protocol):
                     "call tools with the function-calling format"
                 )
         if not p.calls and not p.problems:
-            p.final = c.content.strip()
+            if c.content.strip():
+                p.final = c.content.strip()
+            else:
+                p.problems.append("empty reply; call a tool or give your final answer")
         p.assistant = self._assistant(c, p)
         return p
 

@@ -9,6 +9,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from argus.config import Config
+from argus.detect import (
+    LoopDetector,
+    LoopVerdict,
+    ReasoningBudget,
+    RepetitionMonitor,
+    claims_completion,
+    cut_at_role_marker,
+    periodic_tail,
+    repeated_paragraph,
+)
 from argus.executors import Executor, make_executor
 from argus.llm import Completion, ContextOverflow, Delta, LLMClient, LLMError
 from argus.prompt import PromptParts, base_prompt
@@ -17,6 +27,13 @@ from argus.store import Store, new_id
 from argus.tokens import TokenCounter, measure
 from argus.tools import ToolContext, ToolError, ToolResult, build_tools
 from argus.tools.base import Tool
+
+
+CUT_OFF = (
+    "Your reply was cut off at the output token limit. Be brief: make one tool call, "
+    "or give the final answer."
+)
+RETRY_NUDGE = "Your previous reply ran away and was cut off. Act now: make the next tool call."
 
 
 class Reporter:
@@ -149,6 +166,12 @@ class _Run:
         self.tctx = ToolContext(agent.executor, self.cfg.tools)
         self.context: list[tuple[int, dict[str, Any]]] = []  # (message id, message)
         self.turn = 0
+        a = self.cfg.agent
+        self.loops = LoopDetector(a.loop_repeat, a.loop_abort)
+        self.loop_tagged: set[str] = set()
+        self.idle_turns = 0  # consecutive turns without a valid tool call
+        self.claimed_done: int | None = None  # turn where the model declared completion
+        self.overrun_tagged = False
 
     # -- bookkeeping -----------------------------------------------------------------------
 
@@ -238,34 +261,122 @@ class _Run:
         cfg = self.cfg.agent
         for turn in range(cfg.max_turns):
             self.turn = turn
-            self.rep.turn_start(turn)
-            c = self.generate(turn)
-            if c is None:
+            if self.over_budget(turn):
                 return
-            parsed = self.protocol.parse(c, turn)
-            self.record_turn(turn, c, parsed)
+            self.rep.turn_start(turn)
+            got = self.generate_turn(turn)
+            if got is None:
+                return
+            c, parsed = got
             self.add(parsed.assistant, turn)
             self.rep.turn_end(turn, c, parsed)
 
             if c.finish_reason == "length" and not parsed.calls:
                 self.fail(turn, "token_cap", f"turn hit max_tokens ({self.max_tokens()})")
-                self.feedback(
-                    turn,
-                    "Your reply was cut off at the output token limit. Be brief: make one "
-                    "tool call, or give the final answer.",
-                )
+                self.check_degenerate(turn, c)
+                self.feedback(turn, CUT_OFF)
+                if self.no_progress(turn, "token_cap"):
+                    return
                 continue
             if parsed.final is not None:
-                self.finish("completed", parsed.final)
+                self.finish("completed", self.check_final(turn, c, parsed.final))
                 return
-            self.run_calls(turn, parsed)
+            self.check_claims(turn, parsed)
+            valid = self.run_calls(turn, parsed)
+            if self.result.status != "running":
+                return
             for problem in parsed.problems:
                 self.fail(turn, "malformed_call", problem)
                 self.feedback(turn, f"Error: {problem}")
-            if self.over_budget(turn):
+            if valid:
+                self.idle_turns = 0
+            elif self.no_progress(turn, "malformed_call"):
                 return
         self.fail(cfg.max_turns - 1, "max_turns", f"no final answer after {cfg.max_turns} turns")
         self.finish("failed")
+
+    def generate_turn(self, turn: int) -> tuple[Completion, Parsed] | None:
+        """Generate one turn, retrying once if the generation ran away."""
+        extra: dict[str, Any] | None = None
+        for attempt in range(2):
+            c = self.generate(turn, extra)
+            if c is None:
+                return None
+            parsed = self.protocol.parse(c, turn)
+            self.record_turn(turn, c, parsed, attempt)
+            thinking_only = bool(c.reasoning.strip()) and not c.content.strip() and not parsed.calls
+            if c.aborted == "repetition":
+                self.fail(turn, "loop", c.abort_detail)
+            elif c.aborted:
+                self.fail(turn, "token_cap", c.abort_detail or c.aborted)
+            elif c.finish_reason == "length" and thinking_only:
+                self.fail(
+                    turn,
+                    "token_cap",
+                    f"reasoning used all {self.max_tokens()} max_tokens without acting",
+                )
+                self.check_degenerate(turn, c)
+            else:
+                return c, parsed
+            if attempt == 0 and self.cfg.agent.reasoning_retry:
+                # Retry the turn, without thinking if the reasoning was what ran away.
+                extra = self.protocol.disable_thinking() if thinking_only else None
+                self.rep.note("retrying turn" + (" with thinking disabled" if extra else ""))
+                self.feedback(turn, RETRY_NUDGE)
+                continue
+            break
+        self.finish("failed")
+        return None
+
+    def no_progress(self, turn: int, tag: str) -> bool:
+        """Count a turn without a valid call; abort after agent.max_malformed in a row."""
+        self.idle_turns += 1
+        if self.idle_turns >= self.cfg.agent.max_malformed:
+            self.fail(
+                turn,
+                tag,
+                f"aborting after {self.idle_turns} consecutive turns without a valid tool call",
+            )
+            self.finish("failed")
+            return True
+        return False
+
+    def check_degenerate(self, turn: int, c: Completion) -> None:
+        window = self.cfg.agent.repetition_window
+        for kind, text in (("reasoning", c.reasoning), ("content", c.content)):
+            unit = periodic_tail(text, window)
+            if unit:
+                self.fail(turn, "loop", f"{kind} degenerated into repeating {unit[:60]!r}")
+                return
+
+    def check_final(self, turn: int, c: Completion, final: str) -> str:
+        """Tag and trim output that runs past the final answer."""
+        clean, marker = cut_at_role_marker(final)
+        if marker:
+            self.fail(turn, "overrun", f"generation continued past the final answer ({marker})")
+        para = repeated_paragraph(clean)
+        if para:
+            self.fail(turn, "overrun", f"final answer repeats itself: {para[:80]!r}")
+        return clean.strip()
+
+    def check_claims(self, turn: int, parsed: Parsed) -> None:
+        """Tag tool turns that continue well after the model said the task was complete."""
+        if self.claimed_done is None and claims_completion(parsed.content):
+            self.claimed_done = turn
+            return
+        n = self.cfg.agent.overrun_turns
+        if (
+            self.claimed_done is not None
+            and not self.overrun_tagged
+            and turn - self.claimed_done >= n
+        ):
+            self.overrun_tagged = True
+            self.fail(
+                turn,
+                "overrun",
+                f"still calling tools {turn - self.claimed_done} turns after declaring completion "
+                f"at turn {self.claimed_done}",
+            )
 
     # -- model ---------------------------------------------------------------------------------
 
@@ -301,7 +412,13 @@ class _Run:
         return c
 
     def monitors(self) -> list:
-        return [self.rep.delta]
+        a = self.cfg.agent
+        ms: list = [self.rep.delta]
+        if a.max_reasoning_tokens:
+            ms.append(ReasoningBudget(a.max_reasoning_tokens))
+        if a.repetition_window:
+            ms.append(RepetitionMonitor(a.repetition_window))
+        return ms
 
     def record_turn(self, turn: int, c: Completion, p: Parsed, attempt: int = 0) -> None:
         r = self.result
@@ -349,14 +466,26 @@ class _Run:
 
     # -- tools ---------------------------------------------------------------------------------
 
-    def run_calls(self, turn: int, parsed: Parsed) -> None:
+    def run_calls(self, turn: int, parsed: Parsed) -> int:
+        """Execute the turn's calls; returns how many were valid."""
+        valid = 0
         for i, call in enumerate(parsed.calls):
             self.rep.tool_start(turn, call)
             if call.error:
                 self.fail(turn, "malformed_call", call.error)
                 res, ms = ToolResult(f"Error: {call.error}", ok=False, error=call.error), 0.0
             else:
+                valid += 1
+                if call.salvaged:
+                    self.fail(
+                        turn, "malformed_call", f"salvaged {call.name} call from unparsed text"
+                    )
                 res, ms = self.execute_tool(call)
+                verdict = self.loops.observe(
+                    call.name, call.args, res.text, f"{call.name}({brief_args(call.args, 60)})"
+                )
+                if verdict:
+                    self.on_loop(turn, verdict, res)
             self.rep.tool_end(turn, call, res, ms)
             self.result.tool_calls += 1
             self.result.tool_ms += ms
@@ -377,6 +506,19 @@ class _Run:
                 duration_ms=round(ms, 1),
                 meta_json=res.meta or None,
             )
+            if self.result.status != "running":
+                break
+        return valid
+
+    def on_loop(self, turn: int, verdict: LoopVerdict, res: ToolResult) -> None:
+        if verdict.abort:
+            self.fail(turn, "loop", f"{verdict.detail}; aborting")
+            self.finish("failed")
+            return
+        if verdict.key not in self.loop_tagged:
+            self.loop_tagged.add(verdict.key)
+            self.fail(turn, "loop", verdict.detail)
+        res.text += f"\n[argus: {verdict.detail}. Nothing changed; try a different approach.]"
 
     def execute_tool(self, call: ToolCall) -> tuple[ToolResult, float]:
         tool = self.agent.tools[call.name]

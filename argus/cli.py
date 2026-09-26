@@ -136,6 +136,43 @@ def cmd_overhead(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_failures(args: argparse.Namespace) -> int:
+    store = _store(args)
+    where, params = [], []
+    if args.batch:
+        where.append("r.batch_id = ?")
+        params.append(store.resolve_batch(args.batch))
+    if args.tag:
+        where.append("f.tag = ?")
+        params.append(args.tag)
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    runs_clause = ("WHERE batch_id = ?", params[:1]) if args.batch else ("", [])
+    n_runs = store.q(f"SELECT COUNT(*) AS n FROM runs {runs_clause[0]}", *runs_clause[1])[0]["n"]
+    rows = store.q(
+        f"""SELECT f.tag, COUNT(*) AS events, COUNT(DISTINCT f.run_id) AS runs
+            FROM failures f JOIN runs r ON r.id = f.run_id {clause}
+            GROUP BY f.tag ORDER BY runs DESC, events DESC""",
+        *params,
+    )
+    print(f"{n_runs} runs")
+    print(f"{'tag':<16}{'runs':>6}{'share':>8}{'events':>8}")
+    for row in rows:
+        share = f"{100 * row['runs'] / n_runs:.0f}%" if n_runs else "-"
+        print(f"{row['tag']:<16}{row['runs']:>6}{share:>8}{row['events']:>8}")
+    examples = store.q(
+        f"""SELECT f.tag, f.run_id, f.turn_idx, f.detail FROM failures f
+            JOIN runs r ON r.id = f.run_id {clause} ORDER BY f.id DESC LIMIT ?""",
+        *params,
+        args.limit,
+    )
+    if examples:
+        print("\nrecent:")
+        for e in examples:
+            detail = (e["detail"] or "").replace("\n", " ")
+            print(f"  {e['tag']:<15} {e['run_id']} t{e['turn_idx']}: {detail[:110]}")
+    return 0
+
+
 def cmd_mock_server(args: argparse.Namespace) -> int:
     from argus.mock import MockServer, Script
 
@@ -179,6 +216,14 @@ def build_parser() -> argparse.ArgumentParser:
     sh.add_argument("-c", "--config")
     sh.add_argument("--db")
     sh.set_defaults(fn=cmd_show)
+
+    fl = sub.add_parser("failures", help="failure tag summary across runs")
+    fl.add_argument("--batch", help="restrict to a suite/A-B batch")
+    fl.add_argument("--tag", help="only this tag")
+    fl.add_argument("-n", "--limit", type=int, default=15, help="recent examples to show")
+    fl.add_argument("-c", "--config")
+    fl.add_argument("--db")
+    fl.set_defaults(fn=cmd_failures)
 
     ov = sub.add_parser("overhead", help="measure system prompt + tool schema token overhead")
     ov.add_argument("-w", "--workdir", help="workspace (affects AGENTS.md, skills and the prompt)")

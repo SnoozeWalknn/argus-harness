@@ -117,6 +117,7 @@ def test_bad_arguments_become_error_results(make_agent):
             {"expect": {"last_contains": "unknown tool 'teleport'"}, **final("gave up")},
         ]
     )
+    agent.cfg.agent.max_malformed = 5
     r = agent.run("x")
     assert r.status == "completed", server.errors
     fails = agent.store.failures(r.run_id)
