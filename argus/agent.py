@@ -28,7 +28,6 @@ from argus.tokens import TokenCounter, measure
 from argus.tools import ToolContext, ToolError, ToolResult, build_tools
 from argus.tools.base import Tool
 
-
 CUT_OFF = (
     "Your reply was cut off at the output token limit. Be brief: make one tool call, "
     "or give the final answer."

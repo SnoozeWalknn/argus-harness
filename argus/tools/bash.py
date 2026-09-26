@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from argus.tools.base import Tool, ToolContext, ToolError, ToolResult, obj
-from argus.tools.truncate import head_tail, strip_ansi
+from argus.tools.truncate import smart_truncate
 
 
 class BashTool(Tool):
@@ -28,6 +28,9 @@ class BashTool(Tool):
         timeout = min(max(timeout, 1.0), max(ctx.cfg.bash_timeout * 5, ctx.cfg.bash_timeout))
         r = ctx.executor.run(cmd, timeout=timeout)
         text, truncated = self.shrink(ctx, r.output)
+        if truncated and r.total_bytes > len(text):
+            n_lines = r.output.count("\n") + 1
+            text += f"\n[output was {r.total_bytes} bytes / ~{n_lines} lines; filter it with grep, head or tail to see more]"
         if r.timed_out:
             status = f"[timed out after {timeout:g}s]"
         elif not text.strip():
@@ -49,4 +52,6 @@ class BashTool(Tool):
 
     def shrink(self, ctx: ToolContext, output: str) -> tuple[str, bool]:
         c = ctx.cfg
-        return head_tail(strip_ansi(output), c.bash_max_chars, c.bash_head_lines, c.bash_tail_lines)
+        return smart_truncate(
+            output, c.bash_max_chars, c.bash_head_lines, c.bash_tail_lines, c.max_line_chars
+        )

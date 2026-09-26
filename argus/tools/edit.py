@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 
 from argus.tools.base import Tool, ToolContext, ToolError, ToolResult, obj
+from argus.tools.fuzzy import Ambiguous, Matcher, apply_spans, strip_line_numbers
 from argus.tools.read import number_lines, read_text
 
 SNIPPET_CONTEXT = 3
 SNIPPET_MAX_LINES = 30
+MAX_HINT_LINES = 12
+
+
+@dataclass
+class Edit:
+    text: str
+    first: int
+    last: int
+    count: int
+    notes: list[str] = field(default_factory=list)
+    how: str = "exact"
 
 
 def line_of(text: str, index: int) -> int:
@@ -91,41 +104,91 @@ class EditTool(Tool):
             raise ToolError(f"read {rel} before editing it")
         if old == new:
             raise ToolError("`old` and `new` are identical; nothing to change")
+        stale = ctx.tracker.is_stale(path, data)
 
-        new_text, first, last, count, note = self.apply(
-            ctx, rel, text, old, new, bool(args.get("all"))
-        )
-        if new_text == text:
+        crlf = "\r\n" in text
+        if crlf:  # match on LF text, write CRLF back
+            text = text.replace("\r\n", "\n")
+            old, new = old.replace("\r\n", "\n"), new.replace("\r\n", "\n")
+        edit = self.apply(ctx, rel, text, old, new, bool(args.get("all")), stale)
+        if edit.text == text:
             raise ToolError("edit produced no change")
-        out = new_text.encode()
+        out_text = edit.text.replace("\n", "\r\n") if crlf else edit.text
+        out = out_text.encode()
         ex.write_bytes(path, out)
         ctx.tracker.mark(path, out)
-        what = f"{count} occurrences" if count > 1 else f"lines {first}-{last}"
+        what = f"{edit.count} occurrences" if edit.count > 1 else f"lines {edit.first}-{edit.last}"
         msg = f"Edited {rel} ({what})."
-        if note:
-            msg += f" {note}"
-        return self._done(ctx, rel, path, new_text, msg, (first, last))
+        if edit.notes:
+            msg += " Note: " + "; ".join(edit.notes) + "."
+        res = self._done(ctx, rel, path, edit.text, msg, (edit.first, edit.last))
+        res.meta["match"] = edit.how
+        return res
 
     def apply(
-        self, ctx: ToolContext, rel: str, text: str, old: str, new: str, replace_all: bool
-    ) -> tuple[str, int, int, int, str]:
-        """Return (new_text, first_line, last_line, count, note) or raise ToolError."""
+        self,
+        ctx: ToolContext,
+        rel: str,
+        text: str,
+        old: str,
+        new: str,
+        replace_all: bool,
+        stale: bool = False,
+    ) -> Edit:
+        notes: list[str] = []
         hits = find_all(text, old)
+        if not hits:
+            stripped = strip_line_numbers(old)
+            if stripped is not None:
+                old = stripped
+                new = strip_line_numbers(new) or new
+                notes.append("ignored line-number prefixes copied from read output")
+                hits = find_all(text, old)
         if len(hits) == 1 or (hits and replace_all):
             first = line_of(text, hits[0])
             new_text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
             last = first + max(len(new.splitlines()), 1) - 1
-            return new_text, first, last, len(hits), ""
+            return Edit(new_text, first, last, len(hits), notes, "exact")
         if len(hits) > 1:
             lines = ", ".join(str(line_of(text, h)) for h in hits[:10])
             raise ToolError(
                 f"`old` matches {len(hits)} times in {rel} (lines {lines}); "
-                "add surrounding lines to make it unique, or set all=true"
+                "include more surrounding lines to make it unique, or set all=true"
             )
-        raise ToolError(self.no_match_message(ctx, rel, text, old))
+        matcher = Matcher(text, ctx.cfg.fuzzy_threshold)
+        try:
+            found = matcher.find(old, new, replace_all)
+        except Ambiguous as e:
+            lines = ", ".join(str(n) for n in e.lines[:10])
+            raise ToolError(
+                f"`old` matches {len(e.lines)} places in {rel} {e.how} (lines {lines}); "
+                "include more surrounding lines to make it unique, or set all=true"
+            ) from None
+        if found is None:
+            raise ToolError(self.no_match_message(ctx, rel, matcher, old, stale))
+        new_text = apply_spans(text, found.spans)
+        first = line_of(new_text, found.spans[0].start)
+        last = first + max(len(found.spans[0].replacement.split("\n")), 1) - 1
+        notes.append(f"`old` was not exact; matched {found.how}")
+        return Edit(new_text, first, last, len(found.spans), notes, found.how)
 
-    def no_match_message(self, ctx: ToolContext, rel: str, text: str, old: str) -> str:
-        return f"`old` not found in {rel}; read the file and copy the text exactly"
+    def no_match_message(
+        self, ctx: ToolContext, rel: str, matcher: Matcher, old: str, stale: bool
+    ) -> str:
+        msg = f"`old` not found in {rel}"
+        if stale:
+            msg += " (the file changed since you last read it; read it again)"
+        close = matcher.closest(old)
+        if close and close.ratio >= 0.5:
+            lines = matcher.lines[close.first_line - 1 : close.last_line][:MAX_HINT_LINES]
+            shown = number_lines(lines, close.first_line, ctx.cfg.read_max_line_chars)
+            diff = "\n".join(close.diff.splitlines()[: MAX_HINT_LINES * 2])
+            msg += (
+                f". Closest text ({close.ratio:.0%} similar) is at lines "
+                f"{close.first_line}-{close.last_line}:\n{shown}\n"
+                f"Differences (- your old, + file):\n{diff}"
+            )
+        return msg + "\nCopy `old` exactly from the file, without line numbers."
 
     def _done(
         self,
