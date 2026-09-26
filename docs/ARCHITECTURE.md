@@ -117,8 +117,8 @@ Stored in `failures(run_id, turn, tag, detail)`. A run can have several.
 | `malformed_call` | unparseable arguments, unknown tool, schema-invalid args, tool-call markup left in `content`, unparseable envelope | error result to model; abort after N consecutive |
 | `token_cap`      | `finish_reason=length`, reasoning budget hit, context overflow, run token budget exhausted      | nudge / abort |
 
-Additional non-core tags: `max_turns`, `server_error`, `fs_violation`,
-`interrupted`.
+Additional non-core tags: `max_turns`, `timeout`, `server_error`,
+`fs_violation`, `interrupted`.
 
 ### Executors (goal 4)
 
@@ -144,7 +144,7 @@ retained parts.
 
 ### Tools (goal 4)
 
-- `read(path, offset?, limit?)` — `N|line` numbering (compact), line-length cap,
+- `read(path, offset?, limit?)` — `N<tab>line` numbering (the `cat -n` convention), line-length cap,
   binary detection, "showing a–b of N" footer.
 - `edit(path, old, new, all?)` — exact match first, then a cascade of
   meaning-preserving normalisations (CRLF, copied line-number prefixes,
@@ -178,7 +178,7 @@ index, branches or HEAD, and works in non-git directories. Honors
   - `bash`: changed files are appended to the result (`[files changed: M a.py]`)
     and marked stale in the read tracker.
   - read-only tools never snapshot.
-- `argus diff RUN` and `argus restore RUN [--checkpoint N]` use the refs.
+- `argus diff RUN` and `argus restore RUN [--to N]` use the refs.
 
 ### AGENTS.md and skills (goal 6)
 
@@ -256,69 +256,82 @@ standalone.
 
 ## Module layout
 
+As built (differences from the original proposal: the GBNF generator got its
+own module, the SSH executor lives in `ssh.py`, AGENTS.md loading and the
+`skill` tool live in `skills.py`, and terminal output moved to `console.py`).
+
 ```
 argus/
   cli.py          argparse entry point (argus …)
   config.py       dataclass config, TOML loading, -o key=value overrides, hashing
-  agent.py        the tool loop
-  llm.py          OpenAI-compatible client: streaming SSE assembly, monitors, errors
-  protocols.py    native / json_schema / grammar
-  schema.py       JSON-schema subset validator + JSON-schema → GBNF
+  agent.py        the tool loop: turns, retries, detectors, checkpoints, compaction hooks
+  console.py      live progress reporter and `argus show` transcripts
+  llm.py          OpenAI-compatible client: SSE assembly, stream monitors, errors
+  protocols.py    native / json_schema / grammar, argument validation, markup salvage
+  schema.py       JSON-schema subset validator and lenient coercion
+  gbnf.py         JSON schema → GBNF (compact, fixed key order, <think> prefix)
   tokens.py       token counting (server /tokenize, fallback) and overhead report
-  prompt.py       system prompt assembly, AGENTS.md
-  skills.py       SKILL.md discovery + front matter
-  detect.py       failure detectors
-  compact.py      masking + small-model summarisation
-  fsstate.py      shadow git snapshots/checkpoints/diff/restore, read tracker
+  prompt.py       system prompt assembly
+  skills.py       AGENTS.md loading, SKILL.md discovery, the skill tool
+  detect.py       loop / overrun detectors and stream monitors
+  compact.py      masking, small-model summarisation, drop fallback
+  fsstate.py      shadow git snapshots, checkpoints, diff, restore, fs checks
   store.py        SQLite schema, writer, queries
-  executors.py    LocalExecutor, SSHExecutor
-  suite.py        task suites: load, workspace prep, check
-  report.py       run/batch/A-B reports
+  executors.py    Executor interface, LocalExecutor, bounded output capture
+  ssh.py          SSHExecutor
+  suite.py        task suites: load, workspace prep, checks, oracle, runner
+  report.py       batch / A-B reports and statistics
   tools/
-    base.py       Tool, ToolResult, registry
-    read.py  edit.py  fuzzy.py  bash.py  truncate.py  search.py (glob, grep)  skill.py
+    base.py       Tool, ToolResult, ToolContext, FileTracker
+    read.py  edit.py  fuzzy.py  bash.py  truncate.py  search.py (glob, grep)
   mock/
     server.py     mock OpenAI-compatible server
-    script.py     steps, rendering per protocol, built-in scenarios
-    gbnf.py       small GBNF recogniser used to check grammar-mode output
+    script.py     steps, helpers, request expectations
+    constraints.py  checks constrained output against the request
+    gbnf.py       GBNF recogniser used by the mock and the tests
 tests/            pytest, all against MockServer; no network
-examples/         argus.toml, suite.toml, sample skills
+examples/         argus.toml, grammar.toml, suite/, skills/, mock/
 ```
 
 ## Config
 
 TOML, all keys optional, unknown keys rejected (typos fail loudly). Any key can
-be overridden on the command line: `-o agent.protocol=grammar`.
+be overridden on the command line: `-o agent.protocol='"grammar"'`. The full
+annotated list is [examples/argus.toml](../examples/argus.toml).
 
 ```toml
-[model]      base_url, model, temperature, top_p, top_k, min_p, max_tokens,
-             context_window, stream, enable_thinking, extra_body, timeout
-[agent]      protocol, max_turns, max_run_tokens, max_reasoning_tokens,
-             system_prompt, loop_repeat, loop_abort, max_malformed, …
-[tools]      enabled, read_max_lines, bash_timeout, bash_max_output,
-             fuzzy_threshold, descriptions (overrides), …
-[executor]   kind = local|ssh, host, workdir, ssh_command, ssh_options
-[checkpoint] enabled, excludes
-[context]    agents_md, skill_dirs
-[compaction] enabled, base_url, model, threshold, keep_last_turns
-[log]        db
+[model]      base_url, model, sampling (temperature, top_p, top_k, min_p, …), max_tokens,
+             context_window, stream, enable_thinking, timeout, retries, extra_body
+[agent]      protocol, max_turns, max_wall_seconds, token_budget, max_reasoning_tokens,
+             system_prompt, json_thought, grammar_think, loop_repeat, loop_abort,
+             max_malformed, repetition_window, overrun_turns, reasoning_retry
+[tools]      enabled, descriptions, read_*, require_read_before_edit, fuzzy_threshold,
+             bash_timeout, bash_max_chars, bash_head_lines, bash_tail_lines, …
+[executor]   kind = local|ssh, workdir, host, ssh_command, ssh_options, control_persist
+[checkpoint] enabled, shadow_root, excludes
+[context]    agents_md, global_dir, skills, skill_dirs
+[compaction] enabled, threshold, keep_last_turns, mask, summarize, base_url, model
+[log]        db, measure_overhead
 ```
 
 ## CLI
 
 ```
 argus run "task" [-c cfg.toml] [-w DIR] [-o k=v …] [-v] [--json]
-argus suite run SUITE.toml [-c cfg] [--repeat N] [--task ID]
-argus ab A.toml B.toml --suite SUITE.toml [--repeat N]
-argus overhead [-c cfg]           # token overhead breakdown
-argus runs | show RUN | failures | report BATCH
-argus diff RUN | restore RUN [--checkpoint N]
+argus runs | show RUN | failures [--batch B] [--tag T]
+argus overhead [--all] [--offline]
+argus suite run SUITE.toml [-c cfg] [-n N] [-t ID] [--oracle] [--keep]
+argus suite list SUITE.toml | suite add SUITE.toml --run RUN [--check CMD]
+argus ab A.toml B.toml --suite SUITE.toml [-n N] [--oa k=v] [--ob k=v]
+argus report [BATCH]
+argus checkpoints RUN | diff RUN [--from X --to Y] | restore RUN [--to X] [--yes]
 argus mock-server --script s.json [--port 8080]
 ```
 
 ## Milestones
 
-Each milestone lands as its own commit with tests against the mock server.
+Each milestone landed as its own commit with tests against the mock server;
+all eight are done.
 
 | # | milestone | contents | done when |
 |---|-----------|----------|-----------|
