@@ -8,6 +8,7 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any
 
+from argus.compact import HEAD, SUMMARY_PREFIX, Compaction, Compactor
 from argus.config import Config
 from argus.detect import (
     LoopDetector,
@@ -126,6 +127,7 @@ class Agent:
         self.protocol: Protocol = make_protocol(cfg.agent.protocol, self.tools, cfg.agent)
         self._n_ctx: int | None = None
         self.counter = TokenCounter(self.llm)
+        self.compactor = Compactor(cfg.compaction, self.counter)
 
     def load_context(self) -> None:
         """AGENTS.md files and skills. Failures are recorded, never fatal."""
@@ -187,6 +189,7 @@ class Agent:
         return _Run(self, task, task_id=task_id, batch_id=batch_id, variant=variant).execute()
 
     def close(self) -> None:
+        self.compactor.close()
         self.llm.close()
         self.executor.close()
 
@@ -214,6 +217,8 @@ class _Run:
         self.claimed_done: int | None = None  # turn where the model declared completion
         self.overrun_tagged = False
         self.ckpt: Checkpointer | None = None
+        self.last_prompt: int | None = None  # prompt tokens of the latest request
+        self.projection_from = 0  # context index from which messages are not yet counted
 
     # -- bookkeeping -----------------------------------------------------------------------
 
@@ -318,12 +323,15 @@ class _Run:
             self.turn = turn
             if self.over_budget(turn):
                 return
+            self.maybe_compact(turn)
             self.rep.turn_start(turn)
             got = self.generate_turn(turn)
             if got is None:
                 return
             c, parsed = got
             self.add(parsed.assistant, turn)
+            self.last_prompt = c.prompt_tokens
+            self.projection_from = len(self.context) - 1  # the new assistant message onwards
             self.rep.turn_end(turn, c, parsed)
 
             if c.finish_reason == "length" and not parsed.calls:
@@ -449,13 +457,18 @@ class _Run:
         body["max_tokens"] = self.max_tokens()
         return merge(merge(body, self.cfg.model.extra_body), extra or {})
 
-    def generate(self, turn: int, extra: dict[str, Any] | None = None) -> Completion | None:
+    def generate(
+        self, turn: int, extra: dict[str, Any] | None = None, emergency: bool = False
+    ) -> Completion | None:
         body = self.request(extra)
         self.last_context_ids = [mid for mid, _ in self.context]
         try:
             c = self.agent.llm.chat(body, stream=self.cfg.model.stream, monitors=self.monitors())
         except ContextOverflow as e:
             self.fail(turn, "token_cap", f"context overflow: {e}")
+            if not emergency and self.compact(turn, force=True):
+                self.rep.note("compacted after context overflow; retrying")
+                return self.generate(turn, extra, emergency=True)
             self.finish("failed")
             return None
         except LLMError as e:
@@ -602,6 +615,98 @@ class _Run:
                 if not s.local and (s.path in cmd or ex.rel(s.path) in cmd):
                     self.store.add_skill_invocation(self.id, turn, s.name, s.path, "bash")
 
+    # -- compaction ------------------------------------------------------------------------------
+
+    def projected_tokens(self) -> int:
+        """Prompt size of the next request: last prompt + messages added since."""
+        comp = self.agent.compactor
+        added = sum(comp.tokens(m) for _, m in self.context[self.projection_from :])
+        return (self.last_prompt or 0) + added
+
+    def maybe_compact(self, turn: int) -> None:
+        if not self.cfg.compaction.enabled or self.last_prompt is None:
+            return
+        n_ctx = self.agent.context_window()
+        if n_ctx and self.projected_tokens() > self.agent.compactor.limit(n_ctx):
+            self.compact(turn)
+
+    def compact(self, turn: int, force: bool = False) -> bool:
+        """Shrink the context; returns True if anything changed."""
+        cc = self.cfg.compaction
+        if not cc.enabled:
+            return False
+        comp = self.agent.compactor
+        n_ctx = self.agent.context_window()
+        limit = comp.limit(n_ctx) if n_ctx else 0
+        projected = self.projected_tokens()
+        changed = False
+        if cc.mask:
+            t0 = time.perf_counter()
+            replacements, saved = comp.mask(self.context)
+            if replacements:
+                for i, new in replacements:
+                    mid = self.store.add_message(self.id, turn, new, kind="masked")
+                    self.context[i] = (mid, new)
+                self.log_compaction(
+                    turn,
+                    Compaction("mask", projected, projected - saved, len(replacements), _ms(t0)),
+                )
+                projected -= saved
+                changed = True
+            if not force and projected <= limit:
+                return self.reset_projection(projected, changed)
+        hi = comp.middle_end(self.context)
+        if hi <= HEAD + 1:
+            self.rep.note("nothing left to compact")
+            return self.reset_projection(projected, changed)
+        t0 = time.perf_counter()
+        removed = self.context[HEAD:hi]
+        record = Compaction("summarize", projected, 0, len(removed), 0.0, model=cc.model)
+        summary = None
+        if cc.summarize and comp.llm is not None:
+            try:
+                summary = comp.summarize(self.task, self.context, hi)
+            except Exception as e:  # small model down: fall back to dropping
+                record.error = f"{type(e).__name__}: {e}"
+        if summary:
+            msg = {"role": "user", "content": SUMMARY_PREFIX + summary}
+            record.summary = summary
+        else:
+            record.stage, record.model = "drop", ""
+            msg = {
+                "role": "user",
+                "content": f"[{len(removed)} earlier messages were removed to save context]",
+            }
+        saved = sum(comp.tokens(m) for _, m in removed) - comp.tokens(msg)
+        mid = self.store.add_message(self.id, turn, msg, kind=record.stage)
+        self.context = self.context[:HEAD] + [(mid, msg)] + self.context[hi:]
+        record.tokens_after = projected - saved
+        record.ms = _ms(t0)
+        self.log_compaction(turn, record)
+        return self.reset_projection(record.tokens_after, True)
+
+    def reset_projection(self, projected: int, changed: bool) -> bool:
+        if changed:
+            self.last_prompt = projected
+            self.projection_from = len(self.context)
+        return changed
+
+    def log_compaction(self, turn: int, c: Compaction) -> None:
+        self.store.add_compaction(
+            self.id,
+            turn,
+            stage=c.stage,
+            tokens_before=c.tokens_before,
+            tokens_after=c.tokens_after,
+            messages_affected=c.affected,
+            duration_ms=round(c.ms, 1),
+            model=c.model or None,
+            summary=c.summary or None,
+        )
+        if c.error:
+            self.store.add_event(self.id, turn, "compaction_error", c.error)
+        self.rep.note(f"compacted ({c.stage}): ~{c.tokens_before} → ~{c.tokens_after} tokens")
+
     # -- checkpoints and filesystem checks -------------------------------------------------------
 
     def start_checkpoints(self) -> None:
@@ -701,6 +806,10 @@ def merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
         else:
             out[key] = value
     return out
+
+
+def _ms(t0: float) -> float:
+    return (time.perf_counter() - t0) * 1000
 
 
 def _r(x: float | None) -> float | None:
