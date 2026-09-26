@@ -20,13 +20,21 @@ from argus.detect import (
     repeated_paragraph,
 )
 from argus.executors import Executor, make_executor
+from argus.fsstate import (
+    Change,
+    Checkpoint,
+    Checkpointer,
+    check_edit,
+    mass_deletion,
+    summarize,
+)
 from argus.llm import Completion, ContextOverflow, Delta, LLMClient, LLMError
 from argus.prompt import PromptParts, base_prompt
 from argus.protocols import Parsed, Protocol, ToolCall, make_protocol
 from argus.store import Store, new_id
 from argus.tokens import TokenCounter, measure
 from argus.tools import ToolContext, ToolError, ToolResult, build_tools
-from argus.tools.base import Tool
+from argus.tools.base import Tool, digest
 
 CUT_OFF = (
     "Your reply was cut off at the output token limit. Be brief: make one tool call, "
@@ -171,6 +179,7 @@ class _Run:
         self.idle_turns = 0  # consecutive turns without a valid tool call
         self.claimed_done: int | None = None  # turn where the model declared completion
         self.overrun_tagged = False
+        self.ckpt: Checkpointer | None = None
 
     # -- bookkeeping -----------------------------------------------------------------------
 
@@ -210,6 +219,8 @@ class _Run:
         self.rep.run_start(self.id, self.task)
         if self.cfg.log.measure_overhead:
             self.record_overhead()
+        if self.cfg.checkpoint.enabled:
+            self.start_checkpoints()
         try:
             self.add({"role": "system", "content": parts.render()}, None)
             self.add({"role": "user", "content": self.task}, None)
@@ -222,6 +233,7 @@ class _Run:
             self.store.add_event(self.id, self.turn, "exception", traceback.format_exc())
             self.finish("error")
         finally:
+            self.final_checkpoint()
             r = self.result
             r.wall_ms = (time.perf_counter() - t0) * 1000
             self.store.update_run(
@@ -470,6 +482,7 @@ class _Run:
         valid = 0
         for i, call in enumerate(parsed.calls):
             self.rep.tool_start(turn, call)
+            pre, changes = None, None
             if call.error:
                 self.fail(turn, "malformed_call", call.error)
                 res, ms = ToolResult(f"Error: {call.error}", ok=False, error=call.error), 0.0
@@ -479,7 +492,10 @@ class _Run:
                     self.fail(
                         turn, "malformed_call", f"salvaged {call.name} call from unparsed text"
                     )
+                tool = self.agent.tools[call.name]
+                pre = self.pre_checkpoint(turn, i, call) if tool.mutating else None
                 res, ms = self.execute_tool(call)
+                changes = self.post_check(turn, call, res, pre) if pre else None
                 verdict = self.loops.observe(
                     call.name, call.args, res.text, f"{call.name}({brief_args(call.args, 60)})"
                 )
@@ -504,6 +520,8 @@ class _Run:
                 truncated=int(res.truncated),
                 duration_ms=round(ms, 1),
                 meta_json=res.meta or None,
+                fs_changes_json=[[c.status, c.path] for c in changes] if changes else None,
+                checkpoint=pre.commit if pre else None,
             )
             if self.result.status != "running":
                 break
@@ -518,6 +536,83 @@ class _Run:
             self.loop_tagged.add(verdict.key)
             self.fail(turn, "loop", verdict.detail)
         res.text += f"\n[argus: {verdict.detail}. Nothing changed; try a different approach.]"
+
+    # -- checkpoints and filesystem checks -------------------------------------------------------
+
+    def start_checkpoints(self) -> None:
+        self.ckpt = Checkpointer(self.agent.executor, self.cfg.checkpoint, self.id)
+        cp = self.ckpt.start()
+        if cp is None:
+            self.store.add_event(self.id, None, "checkpoints_disabled", self.ckpt.error)
+            self.rep.note(f"checkpoints disabled: {self.ckpt.error}")
+            return
+        self.store.add_checkpoint(self.id, None, None, cp.commit, cp.tree, "baseline")
+
+    def disable_checkpoints(self, err: Exception) -> None:
+        if self.ckpt:
+            self.ckpt.error = str(err)
+        self.store.add_event(self.id, self.turn, "checkpoints_disabled", str(err))
+        self.rep.note(f"checkpoints disabled: {err}")
+
+    def pre_checkpoint(self, turn: int, i: int, call: ToolCall) -> Checkpoint | None:
+        if not (self.ckpt and self.ckpt.active):
+            return None
+        try:
+            cp = self.ckpt.checkpoint(
+                f"turn {turn}: before {call.name}({brief_args(call.args, 60)})"
+            )
+        except Exception as e:
+            self.disable_checkpoints(e)
+            return None
+        self.store.add_checkpoint(self.id, turn, i, cp.commit, cp.tree, f"before {call.name}")
+        return cp
+
+    def post_check(
+        self, turn: int, call: ToolCall, res: ToolResult, pre: Checkpoint
+    ) -> list[Change] | None:
+        """Compare the workspace with the pre-call checkpoint and check the effect."""
+        ex = self.agent.executor
+        try:
+            _, changes = self.ckpt.changes_since(pre)
+        except Exception as e:
+            self.disable_checkpoints(e)
+            return None
+        if call.name == "edit" and res.ok:
+            path = res.meta.get("path", "")
+            rel = ex.rel(path)
+            if not changes and self.ckpt.git and self.ckpt.git.is_ignored(rel):
+                res.meta["untracked"] = True  # ignored paths are invisible to snapshots
+            else:
+                problem = check_edit(changes, rel)
+                if problem:
+                    self.fail(turn, "fs_violation", problem)
+            try:
+                on_disk = digest(ex.read_bytes(path))
+            except OSError as e:
+                on_disk = f"unreadable: {e}"
+            if res.meta.get("sha1") and on_disk != res.meta["sha1"]:
+                self.fail(turn, "fs_violation", f"{rel} on disk differs from what edit wrote")
+        elif changes and not res.ok:
+            self.fail(
+                turn, "fs_violation", f"failed {call.name} still changed: {summarize(changes)}"
+            )
+        if changes and call.name != "edit":
+            res.text += f"\n[files changed: {summarize(changes)}]"
+            for c in changes:
+                self.tctx.tracker.invalidate(ex.resolve(c.path))
+            problem = mass_deletion(changes)
+            if problem:
+                self.fail(turn, "fs_violation", problem)
+        return changes
+
+    def final_checkpoint(self) -> None:
+        if not (self.ckpt and self.ckpt.active):
+            return
+        try:
+            cp = self.ckpt.checkpoint("final")
+            self.store.add_checkpoint(self.id, self.turn, None, cp.commit, cp.tree, "final")
+        except Exception as e:
+            self.store.add_event(self.id, self.turn, "checkpoint_error", str(e))
 
     def execute_tool(self, call: ToolCall) -> tuple[ToolResult, float]:
         tool = self.agent.tools[call.name]

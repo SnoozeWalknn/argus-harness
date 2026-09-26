@@ -288,6 +288,11 @@ def validate(cfg: Config) -> Config:
     return cfg
 
 
+def config_from_dict(data: dict[str, Any]) -> Config:
+    """Rebuild a config stored with a run (``runs.config_json``)."""
+    return _build(Config, data)
+
+
 def load_config(
     path: str | Path | None = None, overrides: list[str] | None = None, name: str | None = None
 ) -> Config:

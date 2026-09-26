@@ -75,6 +75,12 @@ def q(value: str) -> str:
     return json.dumps(value)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_shadow(tmp_path, monkeypatch):
+    """Keep shadow checkpoint repositories out of the real home directory."""
+    monkeypatch.setenv("ARGUS_SHADOW_ROOT", str(tmp_path / "shadow"))
+
+
 @pytest.fixture
 def make_agent(mock, workspace, db_path):
     agents: list[Agent] = []

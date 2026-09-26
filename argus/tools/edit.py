@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from argus.tools.base import Tool, ToolContext, ToolError, ToolResult, obj
+from argus.tools.base import Tool, ToolContext, ToolError, ToolResult, digest, obj
 from argus.tools.fuzzy import Ambiguous, Matcher, apply_spans, strip_line_numbers
 from argus.tools.read import number_lines, read_text
 
@@ -95,7 +95,9 @@ class EditTool(Tool):
             ex.write_bytes(path, data)
             ctx.tracker.mark(path, data)
             n = len(new.splitlines())
-            return self._done(ctx, rel, path, new, f"Created {rel} ({n} lines).", None)
+            res = self._done(ctx, rel, path, new, f"Created {rel} ({n} lines).", None)
+            res.meta["sha1"] = digest(data)
+            return res
 
         if not ex.exists(path):
             raise ToolError(f'{rel} does not exist; to create it use old=""')
@@ -123,6 +125,7 @@ class EditTool(Tool):
             msg += " Note: " + "; ".join(edit.notes) + "."
         res = self._done(ctx, rel, path, edit.text, msg, (edit.first, edit.last))
         res.meta["match"] = edit.how
+        res.meta["sha1"] = digest(out)
         return res
 
     def apply(

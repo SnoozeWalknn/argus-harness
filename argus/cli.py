@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from argus.config import Config, ConfigError, load_config
+from argus.fsstate import summarize
 from argus.store import Store
 
 
@@ -173,6 +174,95 @@ def cmd_failures(args: argparse.Namespace) -> int:
     return 0
 
 
+def _shadow(store: Store, run_id: str):
+    """Shadow repository holding a run's checkpoints, reached through the run's executor."""
+    from argus.config import config_from_dict
+    from argus.executors import make_executor
+    from argus.fsstate import ShadowGit
+
+    row = store.run(run_id)
+    cfg = config_from_dict(json.loads(row["config_json"]))
+    cfg.executor.workdir = row["workspace"]
+    ex = make_executor(cfg.executor)
+    return ShadowGit(ex, cfg.checkpoint.shadow_root, cfg.checkpoint.excludes)
+
+
+def _pick_checkpoint(rows: list, which: str) -> str:
+    if which in ("baseline", "first"):
+        return rows[0]["commit_sha"]
+    if which in ("final", "last"):
+        return rows[-1]["commit_sha"]
+    try:
+        return rows[int(which)]["commit_sha"]
+    except (ValueError, IndexError):
+        raise SystemExit(
+            f"argus: no checkpoint {which!r} (use baseline, final or 0-{len(rows) - 1})"
+        ) from None
+
+
+def _run_checkpoints(args: argparse.Namespace) -> tuple[Store, str, list]:
+    store = _store(args)
+    run_id = store.resolve_run(args.run)
+    rows = store.checkpoints(run_id)
+    if not rows:
+        raise SystemExit(f"argus: run {run_id} has no checkpoints")
+    return store, run_id, rows
+
+
+def cmd_checkpoints(args: argparse.Namespace) -> int:
+    store, run_id, rows = _run_checkpoints(args)
+    git = _shadow(store, run_id)
+    prev = None
+    print(f"checkpoints of run {run_id} (shadow repo {git.git_dir})")
+    for i, r in enumerate(rows):
+        changed = ""
+        if prev and prev != r["tree_sha"]:
+            changed = summarize(git.diff(prev, r["tree_sha"]), 5)
+        elif prev:
+            changed = "(no change)"
+        turn = "-" if r["turn_idx"] is None else r["turn_idx"]
+        print(f"{i:>3}  t{turn:<4} {r['commit_sha'][:10]}  {r['reason']:<18} {changed}")
+        prev = r["tree_sha"]
+    return 0
+
+
+def cmd_diff(args: argparse.Namespace) -> int:
+    store, run_id, rows = _run_checkpoints(args)
+    git = _shadow(store, run_id)
+    a = _pick_checkpoint(rows, args.frm)
+    b = git.snapshot() if args.to == "now" else _pick_checkpoint(rows, args.to)
+    if args.stat:
+        for c in git.diff(a, b):
+            print(c)
+    else:
+        sys.stdout.write(git.patch(a, b))
+    return 0
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    store, run_id, rows = _run_checkpoints(args)
+    git = _shadow(store, run_id)
+    target = _pick_checkpoint(rows, args.to)
+    now = git.snapshot()
+    plan = git.diff(now, git.tree_of(target))
+    if not plan:
+        print("workspace already matches that checkpoint")
+        return 0
+    verbs = {"D": "delete", "A": "restore", "M": "revert", "T": "revert"}
+    for c in plan:
+        print(f"{verbs.get(c.status, c.status)} {c.path}")
+    if not args.yes:
+        print(f"\n{len(plan)} changes; re-run with --yes to apply (current state is saved first)")
+        return 1
+    safety = git.commit(now, f"before restore of run {run_id} to {args.to}")
+    git.update_ref(f"refs/argus/{run_id}-pre-restore", safety)
+    git.restore(target)
+    print(
+        f"restored {len(plan)} paths; previous state saved as {safety[:10]} (refs/argus/{run_id}-pre-restore)"
+    )
+    return 0
+
+
 def cmd_mock_server(args: argparse.Namespace) -> int:
     from argus.mock import MockServer, Script
 
@@ -224,6 +314,31 @@ def build_parser() -> argparse.ArgumentParser:
     fl.add_argument("-c", "--config")
     fl.add_argument("--db")
     fl.set_defaults(fn=cmd_failures)
+
+    ck = sub.add_parser("checkpoints", help="list a run's workspace checkpoints")
+    ck.add_argument("run", nargs="?", default="last")
+    ck.add_argument("--db")
+    ck.add_argument("-c", "--config")
+    ck.set_defaults(fn=cmd_checkpoints)
+
+    df = sub.add_parser("diff", help="diff the workspace between two checkpoints of a run")
+    df.add_argument("run", nargs="?", default="last")
+    df.add_argument(
+        "--from", dest="frm", default="baseline", help="baseline | final | N (default baseline)"
+    )
+    df.add_argument("--to", default="final", help="baseline | final | N | now (default final)")
+    df.add_argument("--stat", action="store_true", help="only list changed files")
+    df.add_argument("--db")
+    df.add_argument("-c", "--config")
+    df.set_defaults(fn=cmd_diff)
+
+    rs = sub.add_parser("restore", help="restore the workspace to a checkpoint of a run")
+    rs.add_argument("run", nargs="?", default="last")
+    rs.add_argument("--to", default="baseline", help="baseline | final | N (default baseline)")
+    rs.add_argument("--yes", action="store_true", help="apply (otherwise only show the plan)")
+    rs.add_argument("--db")
+    rs.add_argument("-c", "--config")
+    rs.set_defaults(fn=cmd_restore)
 
     ov = sub.add_parser("overhead", help="measure system prompt + tool schema token overhead")
     ov.add_argument("-w", "--workdir", help="workspace (affects AGENTS.md, skills and the prompt)")
