@@ -1,0 +1,27 @@
+{
+  "name": "argus-promo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "60-second launch-style promo video for argus, built with Remotion",
+  "scripts": {
+    "postinstall": "node scripts/prepare-assets.mjs",
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts ArgusPromo argus-promo.mp4",
+    "stills": "node scripts/stills.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "remotion": "4.0.529",
+    "@remotion/cli": "4.0.529",
+    "@remotion/bundler": "4.0.529",
+    "@remotion/renderer": "4.0.529",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "inter-ui": "^4.1.1",
+    "jetbrains-mono": "^1.0.6",
+    "typescript": "^7.0.2"
+  }
+}

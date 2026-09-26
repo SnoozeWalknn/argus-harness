@@ -1,0 +1,8 @@
+{
+  "steps": [
+    {"reasoning": "Start by reading the file.", "tool_calls": [{"name": "read", "arguments": {"path": "calc.py"}}]},
+    {"reasoning": "add() subtracts; fix it.", "tool_calls": [{"name": "edit", "arguments": {"path": "calc.py", "old": "return a - b", "new": "return a + b"}}]},
+    {"tool_calls": [{"name": "bash", "arguments": {"cmd": "python3 -c 'import calc; print(calc.add(2, 3))'"}}]},
+    {"expect": {"last_contains": "5"}, "content": "Fixed add() in calc.py: it now returns a + b."}
+  ]
+}

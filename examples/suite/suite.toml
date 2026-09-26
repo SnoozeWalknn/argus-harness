@@ -1,0 +1,22 @@
+name = "calc-smoke"
+
+[defaults]
+workspace = "fixtures/calc"
+check_timeout = 120
+overrides = ["agent.max_turns=25"]
+
+[[task]]
+id = "fix-add"
+prompt = "test_add fails. Fix the bug in calc.py."
+# checks call the test functions directly so they work without pytest installed
+check = "python3 -c 'import test_calc as t; t.test_add()'"
+
+[[task]]
+id = "mean-empty"
+prompt = "mean([]) raises ZeroDivisionError; make it return 0 instead. Keep other behaviour."
+check = "python3 -c 'import test_calc as t; t.test_mean(); t.test_mean_empty()'"
+
+[[task]]
+id = "add-median"
+prompt = "Add a median(xs) function to calc.py with a test in test_calc.py; all tests must pass."
+check = "python3 -c 'from calc import median; assert median([3, 1, 2]) == 2 and median([1, 2, 3, 4]) == 2.5'"

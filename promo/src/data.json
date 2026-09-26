@@ -1,0 +1,300 @@
+{
+  "source": "argus mock-server (no real model)",
+  "argus_commit": "fc5f619",
+  "overhead": {
+    "native": {
+      "total": 1181,
+      "method": "server",
+      "call_cost": 72
+    },
+    "json_schema": {
+      "total": 294,
+      "method": "server",
+      "call_cost": 63
+    },
+    "grammar": {
+      "total": 294,
+      "method": "server",
+      "call_cost": 55
+    }
+  },
+  "terminal": {
+    "run": {
+      "command": "argus run \"test_add fails; fix calc.py\" -v",
+      "output": [
+        {
+          "text": "run 260926-231420-200777: test_add fails; fix calc.py",
+          "kind": "meta"
+        },
+        {
+          "text": "test_add expects add(2, 3) == 5. Read calc.py first.",
+          "kind": "reasoning"
+        },
+        {
+          "text": "[0] 1211→38 tok, 0.5s",
+          "kind": "turn"
+        },
+        {
+          "text": "  read(path=calc.py)",
+          "kind": "tool"
+        },
+        {
+          "text": "    ✓ 1\tdef add(a, b): (0ms)",
+          "kind": "ok"
+        },
+        {
+          "text": "add() subtracts. Swap the operator.",
+          "kind": "reasoning"
+        },
+        {
+          "text": "[1] 1333→57 tok, 0.7s, cache 1211",
+          "kind": "turn"
+        },
+        {
+          "text": "  edit(path=calc.py, old=return a - b, new=return a + b)",
+          "kind": "tool"
+        },
+        {
+          "text": "    ✓ Edited calc.py (lines 2-2). (1ms)",
+          "kind": "ok"
+        },
+        {
+          "text": "Run the test suite to confirm.",
+          "kind": "reasoning"
+        },
+        {
+          "text": "[2] 1492→42 tok, 0.5s, cache 1333",
+          "kind": "turn"
+        },
+        {
+          "text": "  bash(cmd=python3 -m pytest -q 2>&1 | tail -1)",
+          "kind": "tool"
+        },
+        {
+          "text": "    ✓ 3 passed in 0.01s (316ms)",
+          "kind": "ok"
+        },
+        {
+          "text": "Fixed add() in calc.py: it returned a - b instead of a + b. All 3 tests pass.",
+          "kind": "answer"
+        },
+        {
+          "text": "[3] 1598→42 tok, 0.5s, cache 1492",
+          "kind": "turn"
+        },
+        {
+          "text": "completed · 4 turns · 3 calls · 179 gen tok · max ctx 1640 · 3.1s · run 260926-231420-200777",
+          "kind": "status"
+        },
+        {
+          "text": "Fixed add() in calc.py: it returned a - b instead of a + b. All 3 tests pass.",
+          "kind": "answer"
+        }
+      ]
+    },
+    "show": {
+      "command": "argus show last",
+      "output": [
+        {
+          "text": "run 260926-231420-200777  completed",
+          "kind": "title"
+        },
+        {
+          "text": "task:      test_add fails; fix calc.py",
+          "kind": "field"
+        },
+        {
+          "text": "config:    default (5e78a16d666b)  protocol=native  model=qwen",
+          "kind": "field"
+        },
+        {
+          "text": "workspace: local:/tmp/demo/calc",
+          "kind": "field"
+        },
+        {
+          "text": "tokens:    prompt Σ5634  gen Σ179  reasoning Σ51  max ctx 1640  overhead 1181",
+          "kind": "field"
+        },
+        {
+          "text": "time:      wall 3.1s  llm 2.2s  tools 0.3s",
+          "kind": "field"
+        },
+        {
+          "text": "",
+          "kind": "plain"
+        },
+        {
+          "text": "── turn 0 · prompt 1211 (cache 0) · gen 38 · reasoning≈26 · 0.47s · ttft 14ms · 1000.0 tok/s · finish=tool_calls",
+          "kind": "heading"
+        },
+        {
+          "text": "test_add expects add(2, 3) == 5. Read calc.py first.",
+          "kind": "reasoning"
+        },
+        {
+          "text": "✓ read(path=calc.py)  0ms",
+          "kind": "ok"
+        },
+        {
+          "text": "  1\tdef add(a, b):",
+          "kind": "plain"
+        },
+        {
+          "text": "  2\t    return a - b",
+          "kind": "plain"
+        },
+        {
+          "text": "  3\t",
+          "kind": "plain"
+        },
+        {
+          "text": "  4\t",
+          "kind": "plain"
+        },
+        {
+          "text": "  5\tdef mul(a, b):",
+          "kind": "plain"
+        },
+        {
+          "text": "  6\t    return a * b",
+          "kind": "plain"
+        },
+        {
+          "text": "",
+          "kind": "plain"
+        },
+        {
+          "text": "── turn 1 · prompt 1333 (cache 1211) · gen 57 · reasoning≈13 · 0.71s · ttft 44ms · 1000.0 tok/s · finish=tool_calls",
+          "kind": "heading"
+        },
+        {
+          "text": "add() subtracts. Swap the operator.",
+          "kind": "reasoning"
+        },
+        {
+          "text": "✓ edit(path=calc.py, old=return a - b, new=return a + b)  1ms",
+          "kind": "ok"
+        },
+        {
+          "text": "  Edited calc.py (lines 2-2).",
+          "kind": "plain"
+        },
+        {
+          "text": "  1\tdef add(a, b):",
+          "kind": "plain"
+        },
+        {
+          "text": "  2\t    return a + b",
+          "kind": "plain"
+        },
+        {
+          "text": "  3\t",
+          "kind": "plain"
+        },
+        {
+          "text": "  4\t",
+          "kind": "plain"
+        },
+        {
+          "text": "  5\tdef mul(a, b):",
+          "kind": "plain"
+        },
+        {
+          "text": "",
+          "kind": "plain"
+        },
+        {
+          "text": "── turn 2 · prompt 1492 (cache 1333) · gen 42 · reasoning≈12 · 0.52s · ttft 48ms · 1000.0 tok/s · finish=tool_calls",
+          "kind": "heading"
+        },
+        {
+          "text": "Run the test suite to confirm.",
+          "kind": "reasoning"
+        },
+        {
+          "text": "✓ bash(cmd=python3 -m pytest -q 2>&1 | tail -1)  316ms",
+          "kind": "ok"
+        },
+        {
+          "text": "  3 passed in 0.01s",
+          "kind": "plain"
+        },
+        {
+          "text": "  [exit 0]",
+          "kind": "plain"
+        },
+        {
+          "text": "",
+          "kind": "plain"
+        },
+        {
+          "text": "── turn 3 · prompt 1598 (cache 1492) · gen 42 · reasoning≈0 · 0.52s · ttft 44ms · 1000.0 tok/s · finish=stop",
+          "kind": "heading"
+        },
+        {
+          "text": "Fixed add() in calc.py: it returned a - b instead of a + b. All 3 tests pass.",
+          "kind": "answer"
+        },
+        {
+          "text": "",
+          "kind": "plain"
+        },
+        {
+          "text": "final answer:",
+          "kind": "title"
+        },
+        {
+          "text": "Fixed add() in calc.py: it returned a - b instead of a + b. All 3 tests pass.",
+          "kind": "answer"
+        }
+      ]
+    },
+    "checkpoints": [
+      {
+        "reason": "baseline",
+        "commit": "64368c7",
+        "change": ""
+      },
+      {
+        "reason": "before edit",
+        "commit": "64368c7",
+        "change": "(no change)"
+      },
+      {
+        "reason": "before bash",
+        "commit": "0889c03",
+        "change": "M calc.py"
+      },
+      {
+        "reason": "final",
+        "commit": "0889c03",
+        "change": "(no change)"
+      }
+    ]
+  },
+  "ab": {
+    "illustrative": true,
+    "runs": 16,
+    "variants": [
+      {
+        "label": "native",
+        "passes": 9,
+        "ci95": [
+          0.33178195606776517,
+          0.7690163666481448
+        ]
+      },
+      {
+        "label": "grammar",
+        "passes": 15,
+        "ci95": [
+          0.7167073163197013,
+          0.9888809426916687
+        ]
+      }
+    ],
+    "only_a": 0,
+    "only_b": 6,
+    "mcnemar_p": 0.03125
+  }
+}
