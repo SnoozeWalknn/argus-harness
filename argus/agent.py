@@ -14,6 +14,7 @@ from argus.llm import Completion, ContextOverflow, Delta, LLMClient, LLMError
 from argus.prompt import PromptParts, base_prompt
 from argus.protocols import Parsed, Protocol, ToolCall, make_protocol
 from argus.store import Store, new_id
+from argus.tokens import TokenCounter, measure
 from argus.tools import ToolContext, ToolError, ToolResult, build_tools
 from argus.tools.base import Tool
 
@@ -85,6 +86,7 @@ class Agent:
         self.tools: dict[str, Tool] = build_tools(cfg.tools)
         self.protocol: Protocol = make_protocol(cfg.agent.protocol, self.tools, cfg.agent)
         self._n_ctx: int | None = None
+        self.counter = TokenCounter(self.llm)
 
     def prompt_parts(self) -> PromptParts:
         base = base_prompt(
@@ -184,6 +186,8 @@ class _Run:
             model=self.cfg.model.model,
         )
         self.rep.run_start(self.id, self.task)
+        if self.cfg.log.measure_overhead:
+            self.record_overhead()
         try:
             self.add({"role": "system", "content": parts.render()}, None)
             self.add({"role": "user", "content": self.task}, None)
@@ -216,6 +220,19 @@ class _Run:
             )
             self.rep.run_end(r)
         return self.result
+
+    def record_overhead(self) -> None:
+        a = self.agent
+        try:
+            ov = measure(a, detailed=False, counter=a.counter)
+            self.store.update_run(
+                self.id,
+                overhead_tokens=ov.total,
+                overhead_json=json.dumps(ov.to_dict()),
+                context_window=a.context_window() or None,
+            )
+        except Exception as e:  # measurement must never break a run
+            self.store.add_event(self.id, None, "overhead_error", f"{type(e).__name__}: {e}")
 
     def loop(self) -> None:
         cfg = self.cfg.agent
@@ -260,16 +277,11 @@ class _Run:
         return n
 
     def request(self, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-        body = self.agent.sampling()
+        """Protocol fields, then sampling config, then extra_body, then per-call extras."""
+        body = merge(self.protocol.request_fields(), self.agent.sampling())
         body["messages"] = [m for _, m in self.context]
         body["max_tokens"] = self.max_tokens()
-        body.update(self.protocol.request_fields())
-        for key, value in {**self.cfg.model.extra_body, **(extra or {})}.items():
-            if isinstance(value, dict) and isinstance(body.get(key), dict):
-                body[key] = {**body[key], **value}
-            else:
-                body[key] = value
-        return body
+        return merge(merge(body, self.cfg.model.extra_body), extra or {})
 
     def generate(self, turn: int, extra: dict[str, Any] | None = None) -> Completion | None:
         body = self.request(extra)
@@ -377,6 +389,17 @@ class _Run:
             self.store.add_event(self.id, self.turn, "tool_exception", traceback.format_exc())
             res = ToolResult(f"Error: {type(e).__name__}: {e}", ok=False, error=f"internal: {e}")
         return res, (time.perf_counter() - t0) * 1000
+
+
+def merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
+    """Shallow merge that also merges nested dicts one level (e.g. chat_template_kwargs)."""
+    out = dict(base)
+    for key, value in over.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = {**out[key], **value}
+        else:
+            out[key] = value
+    return out
 
 
 def _r(x: float | None) -> float | None:

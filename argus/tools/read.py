@@ -66,7 +66,7 @@ class ReadTool(Tool):
         },
         ["path"],
     )
-    signature = "read(path, offset?, limit?) - show file with line numbers"
+    summary = "show a file with line numbers"
 
     def run(self, ctx: ToolContext, args: dict) -> ToolResult:
         path = ctx.executor.resolve(args["path"])

@@ -23,7 +23,7 @@ def build_tools(cfg: ToolsConfig) -> dict[str, Tool]:
             raise ValueError(f"unknown tool {name!r}; available: {', '.join(BUILTIN)}")
         tool = BUILTIN[name]()
         if name in cfg.descriptions:
-            tool.description = cfg.descriptions[name]
+            tool.description = tool.summary = cfg.descriptions[name]
         tools[name] = tool
     return tools
 

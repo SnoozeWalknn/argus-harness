@@ -147,6 +147,7 @@ class CompactionConfig:
 @dataclass
 class LogConfig:
     db: str = ""  # default: $ARGUS_DB or ~/.local/share/argus/argus.db
+    measure_overhead: bool = True  # record prompt overhead tokens on every run
 
 
 @dataclass

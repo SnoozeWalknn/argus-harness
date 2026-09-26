@@ -64,8 +64,15 @@ class Tool:
     name: str = ""
     description: str = ""
     parameters: dict[str, Any] = {}
-    signature: str = ""  # one-line form used by the constrained protocols
+    summary: str = ""  # short phrase for the one-line tool list of the constrained protocols
     mutating: bool = False
+
+    def signature(self) -> str:
+        """One-line form, e.g. ``read(path, offset?, limit?) - show a file``."""
+        props = self.parameters.get("properties", {})
+        required = self.parameters.get("required", [])
+        params = ", ".join(p if p in required else f"{p}?" for p in props)
+        return f"{self.name}({params}) - {self.summary or self.description}"
 
     def run(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         raise NotImplementedError

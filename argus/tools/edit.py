@@ -62,7 +62,7 @@ class EditTool(Tool):
         },
         ["path", "old", "new"],
     )
-    signature = 'edit(path, old, new, all?) - replace exact text; old="" creates a file'
+    summary = 'replace exact text (unique unless all); old="" creates a file'
     mutating = True
 
     def run(self, ctx: ToolContext, args: dict) -> ToolResult:

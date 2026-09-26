@@ -17,7 +17,7 @@ class BashTool(Tool):
         },
         ["cmd"],
     )
-    signature = "bash(cmd, timeout?) - run a shell command"
+    summary = "run a shell command in the workspace"
     mutating = True
 
     def run(self, ctx: ToolContext, args: dict) -> ToolResult:

@@ -108,6 +108,34 @@ def cmd_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_overhead(args: argparse.Namespace) -> int:
+    from argus.agent import Agent
+    from argus.config import PROTOCOLS, apply_override
+    from argus.llm import LLMClient
+    from argus.tokens import TokenCounter, format_overhead, measure
+
+    cfg = _config(args)
+    protocols = PROTOCOLS if args.all else [cfg.agent.protocol]
+    m = cfg.model
+    llm = (
+        None if args.offline else LLMClient(m.base_url, m.api_key, m.timeout, m.connect_timeout, 0)
+    )
+    counter = TokenCounter(llm)  # shared, so every protocol is measured the same way
+    rows = []
+    for proto in protocols:
+        apply_override(cfg, f"agent.protocol={json.dumps(proto)}")
+        agent = Agent(cfg, store=Store(":memory:"), llm=llm)
+        rows.append((proto, measure(agent, detailed=True, counter=counter)))
+    if llm:
+        llm.close()
+    if args.json:
+        print(json.dumps({name: ov.to_dict() for name, ov in rows}, indent=2))
+    else:
+        print(f"prompt overhead for config {cfg.name!r} (tokens the harness adds before the task)")
+        print(format_overhead(rows))
+    return 0
+
+
 def cmd_mock_server(args: argparse.Namespace) -> int:
     from argus.mock import MockServer, Script
 
@@ -151,6 +179,14 @@ def build_parser() -> argparse.ArgumentParser:
     sh.add_argument("-c", "--config")
     sh.add_argument("--db")
     sh.set_defaults(fn=cmd_show)
+
+    ov = sub.add_parser("overhead", help="measure system prompt + tool schema token overhead")
+    ov.add_argument("-w", "--workdir", help="workspace (affects AGENTS.md, skills and the prompt)")
+    _add_config_args(ov)
+    ov.add_argument("--all", action="store_true", help="compare all tool-call protocols")
+    ov.add_argument("--offline", action="store_true", help="estimate without contacting the server")
+    ov.add_argument("--json", action="store_true")
+    ov.set_defaults(fn=cmd_overhead)
 
     ms = sub.add_parser("mock-server", help="serve a scripted mock of llama-server")
     ms.add_argument("--script", help="JSON script file")

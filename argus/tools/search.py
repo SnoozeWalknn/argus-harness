@@ -78,7 +78,7 @@ class GlobTool(Tool):
         {"pattern": {"type": "string"}, "path": {"type": "string", "description": "subdirectory"}},
         ["pattern"],
     )
-    signature = "glob(pattern, path?) - list files matching a glob"
+    summary = "list files matching a glob"
 
     def run(self, ctx: ToolContext, args: dict) -> ToolResult:
         prefix = _scope(ctx, args.get("path"))
@@ -106,7 +106,7 @@ class GrepTool(Tool):
         },
         ["pattern"],
     )
-    signature = "grep(pattern, path?, glob?, ignore_case?) - regex search, returns path:line:text"
+    summary = "regex search in files; returns path:line:text"
 
     def command(self, ctx: ToolContext, args: dict) -> str:
         pattern = args["pattern"]
