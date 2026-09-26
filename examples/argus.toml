@@ -1,0 +1,84 @@
+# argus configuration. Every key is optional; the values shown are the defaults
+# unless noted. Unknown keys are rejected. Override anything on the command line:
+#   argus run "..." -c argus.toml -o agent.protocol='"grammar"' -o model.temperature=0.2
+
+[model]
+base_url = "http://127.0.0.1:8080/v1"   # llama-server started with --jinja
+model = "qwen"
+# api_key = ""                          # if llama-server runs with --api-key
+# Sampling: unset values are left to llama-server's own defaults.
+# Qwen3 thinking: temperature 0.6, top_p 0.95, top_k 20, min_p 0
+# Qwen3-Coder:    temperature 0.7, top_p 0.8,  top_k 20, repeat_penalty 1.05
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+max_tokens = 8192          # per-turn generation cap
+context_window = 0         # 0 = ask the server (/props)
+stream = true              # needed for the reasoning-budget / repetition monitors
+# enable_thinking = true   # sets chat_template_kwargs.enable_thinking
+timeout = 600.0
+retries = 2
+# extra_body = { cache_prompt = true }   # merged into every request
+
+[agent]
+protocol = "native"        # native | json_schema | grammar
+max_turns = 50
+max_wall_seconds = 0       # 0 = no wall-clock limit
+token_budget = 0           # cumulative completion tokens per run, 0 = unlimited
+max_reasoning_tokens = 0   # abort + retry a turn whose reasoning runs past this, 0 = off
+# system_prompt = "You are a coding agent in {workdir}. ... {finish}"
+keep_reasoning = false     # send past reasoning back to the model
+json_thought = false       # constrained protocols: leading "thought" field
+grammar_think = true       # grammar protocol: allow a <think>...</think> prefix
+loop_repeat = 3            # identical (call, result) repeats before tagging `loop` + nudge
+loop_abort = 5             # ... before aborting the run
+max_malformed = 3          # consecutive turns without a valid call before aborting
+repetition_window = 400    # chars checked for degenerate repetition, 0 = off
+overrun_turns = 2          # tool turns after a completion claim before tagging `overrun`
+reasoning_retry = true
+
+[tools]
+enabled = ["read", "edit", "bash", "glob", "grep"]   # `skill` is added when skills exist
+# descriptions = { bash = "Run a shell command." }    # override tool descriptions
+read_max_lines = 400
+require_read_before_edit = true
+allow_write_outside_workdir = false
+fuzzy_threshold = 0.95     # similarity needed to apply a non-exact edit; > 1 disables
+bash_timeout = 120.0
+bash_max_chars = 6000
+bash_head_lines = 40
+bash_tail_lines = 80
+grep_max_matches = 100
+glob_max_results = 200
+
+[executor]
+kind = "local"             # local | ssh
+# workdir = ""             # default: current directory (local); required for ssh
+# host = "dev-vm"          # anything ssh accepts, including ~/.ssh/config aliases
+# ssh_options = ["-p", "2222"]
+control_persist = "10m"
+
+[checkpoint]
+enabled = true             # shadow-git checkpoint before each edit/bash call
+# shadow_root = "~/.local/share/argus/shadow"   # on the executor host
+
+[context]
+agents_md = true
+global_dir = "~/.config/argus"                  # global AGENTS.md
+skills = true
+skill_dirs = [".agents/skills", ".claude/skills", "~/.config/argus/skills"]
+
+[compaction]
+enabled = true
+threshold = 0.75           # of the context window
+keep_last_turns = 4
+mask = true                # stage 1: elide old tool output
+summarize = true           # stage 2: summarise with the small model
+base_url = "http://127.0.0.1:8081/v1"   # second llama-server with a small model
+model = "qwen-small"
+max_tokens = 1024
+
+[log]
+# db = "~/.local/share/argus/argus.db"   # or $ARGUS_DB
+measure_overhead = true

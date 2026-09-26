@@ -10,6 +10,7 @@ from pathlib import Path
 from argus.config import Config, ConfigError, load_config
 from argus.fsstate import summarize
 from argus.store import Store
+from argus.suite import SuiteError
 
 
 def _config(args: argparse.Namespace) -> Config:
@@ -263,6 +264,127 @@ def cmd_restore(args: argparse.Namespace) -> int:
     return 0
 
 
+def _progress(args: argparse.Namespace):
+    return (lambda text: print(text, file=sys.stderr, flush=True)) if not args.quiet else None
+
+
+def _reporter_factory(args: argparse.Namespace):
+    from argus.console import ConsoleReporter
+
+    if args.quiet or not args.verbose_runs:
+        return None
+    return lambda: ConsoleReporter(verbose=args.verbose)
+
+
+def _finish_batch(store: Store, batch_id: str, outcomes: list, args: argparse.Namespace) -> int:
+    from argus.report import format_report, summarize
+
+    summary = summarize(store, batch_id)
+    if args.json:
+        print(json.dumps(summary, indent=2))
+    else:
+        print(format_report(summary))
+        kept = [o for o in outcomes if o.workdir and (args.keep or not o.passed)]
+        if kept:
+            print("\nworkspaces kept:")
+            for o in kept:
+                print(f"  {o.task} · {o.variant}: {o.workdir}")
+    return 0 if all(o.passed for o in outcomes) else 1
+
+
+def cmd_suite_run(args: argparse.Namespace) -> int:
+    from argus.suite import SuiteRunner, load_suite
+
+    suite = load_suite(args.suite)
+    cfg = _config(args)
+    store = Store(cfg.db_path())
+    runner = SuiteRunner(
+        suite,
+        [(args.label or cfg.name, cfg)],
+        store,
+        repeat=args.repeat,
+        task_ids=args.task,
+        oracle=True if args.oracle else None,
+        keep=args.keep,
+        reporter_factory=_reporter_factory(args),
+        progress=_progress(args),
+    )
+    batch_id, outcomes = runner.run()
+    return _finish_batch(store, batch_id, outcomes, args)
+
+
+def cmd_suite_list(args: argparse.Namespace) -> int:
+    from argus.suite import load_suite
+
+    suite = load_suite(args.suite)
+    print(f"{suite.name}: {len(suite.tasks)} tasks" + (" (oracle)" if suite.oracle else ""))
+    for t in suite.tasks:
+        src = t.workspace or t.repo or "(empty workspace)"
+        print(f"  {t.id:<24} check={t.check or '-'}  from={src}")
+        print(f"  {'':<24} {t.prompt.strip().splitlines()[0][:90]}")
+    return 0
+
+
+def cmd_suite_add(args: argparse.Namespace) -> int:
+    from argus.suite import append_task
+
+    store = _store(args)
+    run = store.run(store.resolve_run(args.run))
+    workspace = args.workspace
+    if workspace:
+        workspace = str(Path(workspace).resolve())
+    append_task(
+        args.suite,
+        {
+            "id": args.id or f"task-{run['id']}",
+            "prompt": run["task"],
+            "workspace": workspace,
+            "check": args.check,
+        },
+    )
+    print(f"added task from run {run['id']} to {args.suite}")
+    return 0
+
+
+def cmd_ab(args: argparse.Namespace) -> int:
+    from argus.suite import SuiteRunner, load_suite
+
+    suite = load_suite(args.suite)
+    common = list(args.override or [])
+    cfg_a = load_config(args.config_a, common + list(args.override_a or []))
+    cfg_b = load_config(args.config_b, common + list(args.override_b or []))
+    if args.db:
+        cfg_a.log.db = cfg_b.log.db = args.db
+    label_a, label_b = args.label_a or cfg_a.name, args.label_b or cfg_b.name
+    if label_a == label_b:
+        label_a, label_b = f"{label_a}-A", f"{label_b}-B"
+    store = Store(cfg_a.db_path())
+    runner = SuiteRunner(
+        suite,
+        [(label_a, cfg_a), (label_b, cfg_b)],
+        store,
+        repeat=args.repeat,
+        task_ids=args.task,
+        oracle=True if args.oracle else None,
+        keep=args.keep,
+        reporter_factory=_reporter_factory(args),
+        progress=_progress(args),
+        kind="ab",
+    )
+    batch_id, outcomes = runner.run()
+    return _finish_batch(store, batch_id, outcomes, args)
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    from argus.report import format_report, summarize
+
+    store = _store(args)
+    batch_id = store.resolve_batch(args.batch)
+    summary = summarize(store, batch_id)
+    print(json.dumps(summary, indent=2) if args.json else format_report(summary))
+    return 0
+
+
 def cmd_mock_server(args: argparse.Namespace) -> int:
     from argus.mock import MockServer, Script
 
@@ -276,6 +398,21 @@ def cmd_mock_server(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         pass
     return 0
+
+
+def _add_batch_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("-n", "--repeat", type=int, default=1, help="runs per task and variant")
+    p.add_argument("-t", "--task", action="append", help="only this task id (repeatable)")
+    p.add_argument("--oracle", action="store_true", help="run the check after each mutating turn")
+    p.add_argument(
+        "--keep", action="store_true", help="keep all workspaces (default: keep failures)"
+    )
+    p.add_argument("-v", "--verbose", action="store_true", help="with --runs: stream model output")
+    p.add_argument(
+        "--runs", dest="verbose_runs", action="store_true", help="show each run's progress"
+    )
+    p.add_argument("-q", "--quiet", action="store_true")
+    p.add_argument("--json", action="store_true", help="print the report as JSON")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -314,6 +451,49 @@ def build_parser() -> argparse.ArgumentParser:
     fl.add_argument("-c", "--config")
     fl.add_argument("--db")
     fl.set_defaults(fn=cmd_failures)
+
+    su = sub.add_parser("suite", help="task suites: run, list, add")
+    su_sub = su.add_subparsers(dest="suite_command", required=True)
+    sr = su_sub.add_parser("run", help="run every task of a suite in a fresh workspace")
+    sr.add_argument("suite", help="suite TOML file")
+    _add_config_args(sr)
+    _add_batch_args(sr)
+    sr.add_argument("--label", help="variant label (default: config name)")
+    sr.set_defaults(fn=cmd_suite_run)
+    sl = su_sub.add_parser("list", help="show a suite's tasks")
+    sl.add_argument("suite")
+    sl.set_defaults(fn=cmd_suite_list)
+    sa = su_sub.add_parser("add", help="append a logged run's task to a suite")
+    sa.add_argument("suite")
+    sa.add_argument("--run", default="last", help="run id (default: last)")
+    sa.add_argument("--id", help="task id")
+    sa.add_argument("--check", help="command that passes (exit 0) when the task is done")
+    sa.add_argument("--workspace", help="directory to copy as the task's starting workspace")
+    sa.add_argument("--db")
+    sa.add_argument("-c", "--config")
+    sa.set_defaults(fn=cmd_suite_add)
+
+    ab = sub.add_parser("ab", help="run a suite under two configs and compare")
+    ab.add_argument("config_a", help="config A (TOML)")
+    ab.add_argument("config_b", help="config B (TOML)")
+    ab.add_argument("--suite", required=True)
+    ab.add_argument(
+        "-o", "--override", action="append", metavar="KEY=VALUE", help="override for both"
+    )
+    ab.add_argument("--oa", "--override-a", dest="override_a", action="append", metavar="KEY=VALUE")
+    ab.add_argument("--ob", "--override-b", dest="override_b", action="append", metavar="KEY=VALUE")
+    ab.add_argument("--label-a")
+    ab.add_argument("--label-b")
+    ab.add_argument("--db")
+    _add_batch_args(ab)
+    ab.set_defaults(fn=cmd_ab)
+
+    rp = sub.add_parser("report", help="report for a suite or A/B batch")
+    rp.add_argument("batch", nargs="?", default="last")
+    rp.add_argument("--json", action="store_true")
+    rp.add_argument("--db")
+    rp.add_argument("-c", "--config")
+    rp.set_defaults(fn=cmd_report)
 
     ck = sub.add_parser("checkpoints", help="list a run's workspace checkpoints")
     ck.add_argument("run", nargs="?", default="last")
@@ -364,6 +544,9 @@ def main(argv: list[str] | None = None) -> int:
         return int(args.fn(args) or 0)
     except ConfigError as e:
         print(f"argus: config error: {e}", file=sys.stderr)
+        return 2
+    except (SuiteError, KeyError) as e:
+        print(f"argus: {e.args[0] if e.args else e}", file=sys.stderr)
         return 2
     except BrokenPipeError:
         return 0

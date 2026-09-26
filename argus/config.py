@@ -50,6 +50,7 @@ class ModelConfig:
 class AgentConfig:
     protocol: str = "native"  # native | json_schema | grammar
     max_turns: int = 50
+    max_wall_seconds: float = 0  # 0 = no wall-clock limit (checked between turns)
     token_budget: int = 0  # cumulative completion tokens per run, 0 = unlimited
     max_reasoning_tokens: int = 0  # abort a turn's reasoning after this many tokens, 0 = off
     system_prompt: str = ""  # override; {workdir} is substituted

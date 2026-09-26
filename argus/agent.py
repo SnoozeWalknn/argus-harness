@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -185,8 +186,12 @@ class Agent:
         task_id: str | None = None,
         batch_id: str | None = None,
         variant: str | None = None,
+        after_turn: Callable[[int, _Run], None] | None = None,
     ) -> RunResult:
-        return _Run(self, task, task_id=task_id, batch_id=batch_id, variant=variant).execute()
+        """Run one task. ``after_turn(turn, run)`` is called after each tool turn."""
+        run = _Run(self, task, task_id=task_id, batch_id=batch_id, variant=variant)
+        run.after_turn = after_turn
+        return run.execute()
 
     def close(self) -> None:
         self.compactor.close()
@@ -217,6 +222,9 @@ class _Run:
         self.claimed_done: int | None = None  # turn where the model declared completion
         self.overrun_tagged = False
         self.ckpt: Checkpointer | None = None
+        self.after_turn: Callable[[int, _Run], None] | None = None
+        self.turn_mutated = False  # a mutating tool ran this turn
+        self.t0 = time.perf_counter()
         self.last_prompt: int | None = None  # prompt tokens of the latest request
         self.projection_from = 0  # context index from which messages are not yet counted
 
@@ -321,7 +329,12 @@ class _Run:
         cfg = self.cfg.agent
         for turn in range(cfg.max_turns):
             self.turn = turn
+            self.turn_mutated = False
             if self.over_budget(turn):
+                return
+            if cfg.max_wall_seconds and time.perf_counter() - self.t0 > cfg.max_wall_seconds:
+                self.fail(turn, "timeout", f"run exceeded {cfg.max_wall_seconds:g}s")
+                self.finish("failed")
                 return
             self.maybe_compact(turn)
             self.rep.turn_start(turn)
@@ -355,6 +368,10 @@ class _Run:
                 self.idle_turns = 0
             elif self.no_progress(turn, "malformed_call"):
                 return
+            if self.after_turn:
+                self.after_turn(turn, self)
+                if self.result.status != "running":
+                    return
         self.fail(cfg.max_turns - 1, "max_turns", f"no final answer after {cfg.max_turns} turns")
         self.finish("failed")
 
@@ -550,6 +567,7 @@ class _Run:
                         turn, "malformed_call", f"salvaged {call.name} call from unparsed text"
                     )
                 tool = self.agent.tools[call.name]
+                self.turn_mutated |= tool.mutating
                 pre = self.pre_checkpoint(turn, i, call) if tool.mutating else None
                 res, ms = self.execute_tool(call)
                 changes = self.post_check(turn, call, res, pre) if pre else None

@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS runs (
     batch_id TEXT REFERENCES batches(id),
     variant TEXT,                    -- A/B label or config name
     task_id TEXT,
+    rep INTEGER,                     -- repetition index within a batch
     task TEXT NOT NULL,
     config_name TEXT,
     config_hash TEXT,
