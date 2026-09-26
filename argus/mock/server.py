@@ -1,0 +1,513 @@
+"""A scripted, OpenAI-compatible stand-in for llama-server.
+
+Implements ``/v1/chat/completions`` (streaming and not), ``/tokenize``,
+``/apply-template``, ``/props``, ``/health`` and ``/v1/models``. Responses come
+from a :class:`~argus.mock.script.Script`. Generation honours ``max_tokens``
+and the context size (``finish_reason = "length"``), simulates KV-cache reuse
+(``timings.cache_n``), stops when the client disconnects, and checks that
+constrained output actually satisfies the request's schema or grammar.
+"""
+
+from __future__ import annotations
+
+import itertools
+import json
+import re
+import threading
+import time
+import zlib
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
+
+from argus.mock.script import Script, Step, check_expect, request_protocol
+
+TOKEN_RE = re.compile(r"\s+|\w+|[^\w\s]")
+
+
+def tokenize(text: str) -> list[str]:
+    """Deterministic stand-in tokenizer: words, punctuation and whitespace runs."""
+    return TOKEN_RE.findall(text)
+
+
+def token_ids(text: str) -> list[int]:
+    return [zlib.crc32(t.encode()) % 150_000 for t in tokenize(text)]
+
+
+QWEN_TOOLS_PREAMBLE = (
+    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\n"
+    "You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n"
+)
+QWEN_TOOLS_POST = (
+    "\n</tools>\n\nFor each function call, return a json object with function name and "
+    "arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n"
+    '{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>'
+)
+
+
+def render_chatml(req: dict[str, Any]) -> str:
+    """Approximation of Qwen's chat template (ChatML + Hermes-style tools)."""
+    msgs = list(req.get("messages") or [])
+    tools = req.get("tools") or []
+    out = []
+    system = ""
+    if msgs and msgs[0].get("role") == "system":
+        system = msgs.pop(0).get("content") or ""
+    if tools:
+        body = "\n".join(json.dumps(t, separators=(", ", ": ")) for t in tools)
+        system = (system + "\n\n" if system else "") + QWEN_TOOLS_PREAMBLE + body + QWEN_TOOLS_POST
+    if system:
+        out.append(f"<|im_start|>system\n{system}<|im_end|>\n")
+    for m in msgs:
+        role = m.get("role")
+        content = m.get("content") or ""
+        if isinstance(content, list):
+            content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+        if role == "tool":
+            out.append(
+                f"<|im_start|>user\n<tool_response>\n{content}\n</tool_response><|im_end|>\n"
+            )
+        elif role == "assistant":
+            text = content
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                args = fn.get("arguments", "{}")
+                text += f'\n<tool_call>\n{{"name": "{fn.get("name")}", "arguments": {args}}}\n</tool_call>'
+            out.append(f"<|im_start|>assistant\n{text.strip()}<|im_end|>\n")
+        else:
+            out.append(f"<|im_start|>{role}\n{content}<|im_end|>\n")
+    out.append("<|im_start|>assistant\n")
+    return "".join(out)
+
+
+class _Gen:
+    """What the scripted model 'generates' for one request."""
+
+    def __init__(self) -> None:
+        self.reasoning: list[str] = []
+        self.content: list[str] = []
+        self.tool_calls: list[dict[str, Any]] = []  # {"id","name","arguments": str}
+        self.finish_reason = "stop"
+
+
+def _repeat(text: str, n: int) -> Iterator[str]:
+    pieces = tokenize(text)
+    for _ in range(n):
+        yield from pieces
+
+
+class MockServer:
+    def __init__(
+        self,
+        script: Script | list[Any] | None = None,
+        *,
+        n_ctx: int = 32768,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        model: str = "mock-qwen",
+        chunk_delay: float = 0.0,
+        strict: bool = True,
+    ):
+        self.script = script if isinstance(script, Script) else Script(script or [])
+        self.n_ctx = n_ctx
+        self.host = host
+        self.model = model
+        self.chunk_delay = chunk_delay
+        self.strict = strict  # validate constrained output against the request
+        self.requests: list[dict[str, Any]] = []
+        self.responses: list[dict[str, Any]] = []
+        self.errors: list[str] = []  # failed expectations / invalid scripted output
+        self.aborted = 0  # streams closed by the client mid-generation
+        self._last_prompt: list[int] = []
+        self._lock = threading.Lock()
+        self._counter = itertools.count()
+        self.httpd = ThreadingHTTPServer((host, port), _Handler)
+        self.httpd.daemon_threads = True
+        self.httpd.mock = self  # type: ignore[attr-defined]
+        self._thread: threading.Thread | None = None
+
+    # -- lifecycle ---------------------------------------------------------------------------
+
+    @property
+    def port(self) -> int:
+        return self.httpd.server_address[1]
+
+    @property
+    def url(self) -> str:
+        return f"http://{self.host}:{self.port}/v1"
+
+    def start(self) -> MockServer:
+        self._thread = threading.Thread(target=self.httpd.serve_forever, args=(0.05,), daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+    def __enter__(self) -> MockServer:
+        return self.start()
+
+    def __exit__(self, *exc: Any) -> None:
+        self.stop()
+
+    def serve_forever(self) -> None:
+        self.httpd.serve_forever()
+
+    # -- generation ------------------------------------------------------------------------
+
+    def prompt_tokens(self, req: dict[str, Any]) -> list[int]:
+        return token_ids(render_chatml(req))
+
+    def build(self, req: dict[str, Any], step: Step) -> _Gen:
+        g = _Gen()
+        proto = request_protocol(req)
+        g.reasoning = list(_repeat(step.get("reasoning", ""), int(step.get("reasoning_repeat", 1))))
+        calls = []
+        for i, tc in enumerate(step.get("tool_calls") or []):
+            args = tc.get("arguments", {})
+            calls.append(
+                {
+                    "id": tc.get("id") or f"call_{next(self._counter)}",
+                    "name": tc["name"],
+                    "arguments": args if isinstance(args, str) else json.dumps(args),
+                    "args_obj": args,
+                    "index": i,
+                }
+            )
+        if proto == "native":
+            g.content = list(_repeat(step.get("content", ""), int(step.get("content_repeat", 1))))
+            g.tool_calls = calls
+            g.finish_reason = "tool_calls" if calls else "stop"
+        else:
+            text = step["raw"] if "raw" in step else self.envelope(req, step, calls)
+            g.content = tokenize(text)
+            if not step.get("raw"):
+                self.validate_output(req, text)
+        if step.get("finish_reason"):
+            g.finish_reason = step["finish_reason"]
+        return g
+
+    def envelope(self, req: dict[str, Any], step: Step, calls: list[dict[str, Any]]) -> str:
+        """Render a step as the JSON action envelope used by the constrained protocols."""
+        spec = json.dumps(req.get("response_format") or {}) + str(req.get("grammar") or "")
+        env: dict[str, Any] = {}
+        if "thought" in spec:
+            env["thought"] = step.get("thought", "")
+        if calls:
+            if len(calls) > 1:
+                self.errors.append(
+                    "constrained protocols take one action per turn; extra calls dropped"
+                )
+            c = calls[0]
+            env["tool"] = c["name"]
+            env["args"] = c["args_obj"] if not isinstance(c["args_obj"], str) else c["args_obj"]
+            if isinstance(env["args"], str):  # malformed args under a constraint: emit raw text
+                prefix = json.dumps({k: v for k, v in env.items() if k != "args"})[:-1]
+                return f'{prefix}, "args": {env["args"]}}}'
+        else:
+            content = step.get("content", "")
+            env["tool"] = "done"
+            env["args"] = {"summary": content * int(step.get("content_repeat", 1))}
+        return json.dumps(env, separators=(",", ":"))
+
+    def validate_output(self, req: dict[str, Any], text: str) -> None:
+        if not self.strict:
+            return
+        from argus.mock import constraints
+
+        problem = constraints.check(req, text)
+        if problem:
+            self.errors.append(f"scripted output violates the request constraint: {problem}")
+
+    def plan(
+        self, req: dict[str, Any], step: Step, n_prompt: int
+    ) -> tuple[_Gen, list[tuple[str, Any]], bool]:
+        """Flatten a generation into (kind, piece) tokens, applying the output limits."""
+        g = self.build(req, step)
+        max_tokens = req.get("max_tokens", req.get("n_predict", -1))
+        if max_tokens is None or max_tokens < 0:
+            max_tokens = 1 << 30
+        limit = min(max_tokens, max(self.n_ctx - n_prompt, 0))
+        pieces: list[tuple[str, Any]] = []
+        truncated = False
+
+        def take(kind: str, items: Any) -> bool:
+            nonlocal truncated
+            for it in items:
+                if len(pieces) >= limit:
+                    truncated = True
+                    return False
+                pieces.append((kind, it))
+            return True
+
+        ok = take("reasoning", g.reasoning) and take("content", g.content)
+        if ok:
+            for tc in g.tool_calls:
+                arg_pieces = tokenize(tc["arguments"]) or [""]
+                if not take("tool", [(tc, p, j == 0) for j, p in enumerate(arg_pieces)]):
+                    break
+        if truncated:
+            g.finish_reason = "length"
+            # Calls cut mid-way are not parsed; their text surfaces as content, like llama-server.
+            done_calls: dict[str, str] = {}
+            for kind, it in pieces:
+                if kind == "tool":
+                    done_calls.setdefault(it[0]["id"], "")
+                    done_calls[it[0]["id"]] += it[1]
+            pieces = [p for p in pieces if p[0] != "tool"]
+            for cid, partial in done_calls.items():
+                name = next(tc["name"] for tc in g.tool_calls if tc["id"] == cid)
+                pieces.append(
+                    ("content", f'<tool_call>\n{{"name": "{name}", "arguments": {partial}')
+                )
+            g.tool_calls = []
+        return g, pieces, truncated
+
+    def cache_hit(self, prompt: list[int]) -> int:
+        with self._lock:
+            n = 0
+            for a, b in zip(prompt, self._last_prompt, strict=False):
+                if a != b:
+                    break
+                n += 1
+            self._last_prompt = prompt
+        return n
+
+
+class _Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "argus-mock/0.1"
+
+    @property
+    def mock(self) -> MockServer:
+        return self.server.mock  # type: ignore[attr-defined]
+
+    def log_message(self, fmt: str, *args: Any) -> None:  # silence
+        pass
+
+    # -- plumbing ----------------------------------------------------------------------------
+
+    def _json(self, status: int, obj: Any) -> None:
+        data = json.dumps(obj).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _error(self, status: int, message: str, type_: str = "server_error", **extra: Any) -> None:
+        self._json(status, {"error": {"code": status, "message": message, "type": type_, **extra}})
+
+    def _body(self) -> dict[str, Any]:
+        n = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(n) if n else b"{}"
+        return json.loads(raw or b"{}")
+
+    def do_GET(self) -> None:
+        path = self.path.split("?")[0].rstrip("/")
+        m = self.mock
+        if path in ("/health", "/v1/health"):
+            self._json(200, {"status": "ok"})
+        elif path in ("/props", "/v1/props"):
+            self._json(
+                200,
+                {
+                    "default_generation_settings": {"n_ctx": m.n_ctx, "params": {}},
+                    "total_slots": 1,
+                    "model_path": f"/models/{m.model}.gguf",
+                    "chat_template": "chatml (argus mock)",
+                    "build_info": "argus-mock",
+                },
+            )
+        elif path in ("/v1/models", "/models"):
+            self._json(200, {"object": "list", "data": [{"id": m.model, "object": "model"}]})
+        else:
+            self._error(404, f"no route {path}", "not_found_error")
+
+    def do_POST(self) -> None:
+        path = self.path.split("?")[0].rstrip("/")
+        try:
+            body = self._body()
+        except json.JSONDecodeError as e:
+            self._error(400, f"invalid JSON body: {e}", "invalid_request_error")
+            return
+        if path in ("/tokenize", "/v1/tokenize"):
+            text = body.get("content", "")
+            if body.get("with_pieces"):
+                self._json(
+                    200,
+                    {
+                        "tokens": [
+                            {"id": i, "piece": p}
+                            for i, p in zip(token_ids(text), tokenize(text), strict=True)
+                        ]
+                    },
+                )
+            else:
+                self._json(200, {"tokens": token_ids(text)})
+        elif path in ("/apply-template", "/v1/apply-template"):
+            self._json(200, {"prompt": render_chatml(body)})
+        elif path in ("/v1/chat/completions", "/chat/completions"):
+            self._chat(body)
+        else:
+            self._error(404, f"no route {path}", "not_found_error")
+
+    # -- chat ----------------------------------------------------------------------------------
+
+    def _chat(self, req: dict[str, Any]) -> None:
+        m = self.mock
+        with m._lock:
+            m.requests.append(req)
+        # An oversized prompt is rejected before the model "generates" (no step consumed).
+        prompt = m.prompt_tokens(req)
+        if len(prompt) > m.n_ctx:
+            self._error(
+                400,
+                "the request exceeds the available context size, try increasing it",
+                "exceed_context_size_error",
+                n_prompt_tokens=len(prompt),
+                n_ctx=m.n_ctx,
+            )
+            return
+        step = m.script.next(req, m)
+        if step.get("expect"):
+            problems = check_expect(step["expect"], req)
+            if problems:
+                msg = "mock expectation failed: " + "; ".join(problems)
+                m.errors.append(msg)
+                self._error(500, msg, "mock_error")
+                return
+        if step.get("delay"):
+            time.sleep(float(step["delay"]))
+        if step.get("error"):
+            e = step["error"]
+            self._error(
+                int(e.get("status", 500)),
+                e.get("message", "mock error"),
+                e.get("type", "server_error"),
+            )
+            return
+        cache_n = m.cache_hit(prompt)
+        g, pieces, _ = m.plan(req, step, len(prompt))
+        n_gen = len(pieces)
+        timings = {
+            "cache_n": cache_n,
+            "prompt_n": len(prompt) - cache_n,
+            "prompt_ms": (len(prompt) - cache_n) * 0.05,
+            "prompt_per_second": 20000.0,
+            "predicted_n": n_gen,
+            "predicted_ms": n_gen * 1.0,
+            "predicted_per_second": 1000.0,
+        }
+        usage = {
+            "prompt_tokens": len(prompt),
+            "completion_tokens": n_gen,
+            "total_tokens": len(prompt) + n_gen,
+            "prompt_tokens_details": {"cached_tokens": cache_n},
+        }
+        record = {
+            "reasoning": "".join(p for k, p in pieces if k == "reasoning"),
+            "content": "".join(p for k, p in pieces if k == "content"),
+            "tool_calls": [
+                {"name": tc["name"], "arguments": tc["arguments"]} for tc in g.tool_calls
+            ],
+            "finish_reason": g.finish_reason,
+            "usage": usage,
+        }
+        with m._lock:
+            m.responses.append(record)
+        if req.get("stream"):
+            self._stream(req, step, g, pieces, usage, timings)
+        else:
+            message: dict[str, Any] = {"role": "assistant", "content": record["content"] or None}
+            if record["reasoning"]:
+                message["reasoning_content"] = record["reasoning"]
+            if g.tool_calls:
+                message["tool_calls"] = [
+                    {
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                    }
+                    for tc in g.tool_calls
+                ]
+            self._json(
+                200,
+                {
+                    "id": f"chatcmpl-{next(m._counter)}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": req.get("model", m.model),
+                    "choices": [{"index": 0, "message": message, "finish_reason": g.finish_reason}],
+                    "usage": usage,
+                    "timings": timings,
+                },
+            )
+
+    def _stream(
+        self,
+        req: dict[str, Any],
+        step: Step,
+        g: _Gen,
+        pieces: list[tuple[str, Any]],
+        usage: dict[str, Any],
+        timings: dict[str, Any],
+    ) -> None:
+        m = self.mock
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        cid = f"chatcmpl-{next(m._counter)}"
+        delay = float(step.get("chunk_delay", m.chunk_delay))
+
+        def chunk(delta: dict[str, Any], finish: str | None = None, **extra: Any) -> dict[str, Any]:
+            return {
+                "id": cid,
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": req.get("model", m.model),
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+                **extra,
+            }
+
+        def send(obj: Any) -> None:
+            self.wfile.write(f"data: {json.dumps(obj)}\n\n".encode())
+            self.wfile.flush()
+
+        try:
+            send(chunk({"role": "assistant", "content": None}))
+            for kind, piece in pieces:
+                if delay:
+                    time.sleep(delay)
+                if kind == "reasoning":
+                    send(chunk({"reasoning_content": piece}))
+                elif kind == "content":
+                    send(chunk({"content": piece}))
+                else:
+                    tc, text, first = piece
+                    fn: dict[str, Any] = {"arguments": text}
+                    entry: dict[str, Any] = {"index": tc["index"], "function": fn}
+                    if first:
+                        entry.update(id=tc["id"], type="function")
+                        fn["name"] = tc["name"]
+                    send(chunk({"tool_calls": [entry]}))
+            send(chunk({}, g.finish_reason, timings=timings))
+            if (req.get("stream_options") or {}).get("include_usage"):
+                send(
+                    {
+                        "id": cid,
+                        "object": "chat.completion.chunk",
+                        "choices": [],
+                        "usage": usage,
+                        "timings": timings,
+                    }
+                )
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            with m._lock:
+                m.aborted += 1
