@@ -145,6 +145,12 @@ class LLMClient:
                 if attempt > self.retries:
                     raise LLMError(f"cannot reach {self.base_url}: {e}") from e
                 time.sleep(min(0.5 * 2**attempt, 8))
+            except httpx.TimeoutException as e:
+                raise LLMError(f"timed out waiting for {self.base_url}: {e!r}") from e
+            except httpx.HTTPError as e:
+                raise LLMError(f"request to {self.base_url} failed: {e!r}") from e
+            except json.JSONDecodeError as e:
+                raise LLMError(f"invalid JSON from {self.base_url}: {e}") from e
 
     def _url(self) -> str:
         return f"{self.base_url}/chat/completions"
@@ -225,7 +231,9 @@ class LLMClient:
                         raise
                     raise LLMError(f"stream interrupted: {e}") from e
         except httpx.ReadTimeout as e:
-            raise LLMError(f"timed out waiting for {self.base_url}: {e}") from e
+            if not got_data:
+                raise
+            raise LLMError(f"stream stalled (no data for {self.http.timeout.read}s): {e!r}") from e
         c.total_ms = (time.perf_counter() - t0) * 1000
         for idx in sorted(calls):
             tc = calls[idx]

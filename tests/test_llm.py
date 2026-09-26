@@ -85,3 +85,12 @@ def test_root_url():
     assert root_url("http://h:1/v1") == "http://h:1"
     assert root_url("http://h:1/v1/") == "http://h:1"
     assert root_url("http://h:1") == "http://h:1"
+
+
+def test_read_timeout_becomes_llm_error(mock):
+    s = mock([{"delay": 2, "content": "late"}, {"content": "x", "chunk_delay": 2}])
+    client = LLMClient(s.url, retries=0, timeout=0.5)
+    with pytest.raises(LLMError, match="timed out"):
+        client.chat({"messages": MSGS}, stream=False)
+    with pytest.raises(LLMError, match="stalled|timed out"):
+        client.chat({"messages": MSGS}, stream=True)

@@ -104,6 +104,10 @@ def test_load_suite(suite_file):
         ('[[task]]\nid = "a"\nprompt = "x"\n[[task]]\nid = "a"\nprompt = "y"\n', "duplicate"),
         ('[[task]]\nprompt = "x"\nworkspace = "missing"\n', "not a directory"),
         ('name = "empty"\n', "no \\[\\[task\\]\\]"),
+        (
+            '[[task]]\nprompt = "x"\noverrides = ["agent.bogus=1"]\n',
+            "unknown config key: agent.bogus",
+        ),
     ],
 )
 def test_suite_validation(tmp_path, body, err):

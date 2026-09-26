@@ -41,7 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from argus.agent import Agent, Reporter, RunResult
-from argus.config import Config, apply_override
+from argus.config import Config, ConfigError, apply_override
 from argus.executors import Executor, make_executor
 from argus.store import Store
 
@@ -130,6 +130,13 @@ def load_suite(path: str | Path) -> Suite:
             ws = str((p.parent / ws).resolve())
             if not Path(ws).is_dir():
                 raise SuiteError(f"{p}: task {tid}: workspace {ws} is not a directory")
+        overrides = list(merged.get("overrides", []))
+        try:  # fail at load time, not halfway through a batch
+            probe = Config()
+            for o in overrides:
+                apply_override(probe, o)
+        except ConfigError as e:
+            raise SuiteError(f"{p}: task {tid}: {e}") from None
         setup = merged.get("setup", [])
         tasks.append(
             Task(
@@ -141,7 +148,7 @@ def load_suite(path: str | Path) -> Suite:
                 setup=[setup] if isinstance(setup, str) else list(setup),
                 check=merged.get("check"),
                 check_timeout=float(merged.get("check_timeout", 300)),
-                overrides=list(merged.get("overrides", [])),
+                overrides=overrides,
                 tags=list(merged.get("tags", [])),
             )
         )

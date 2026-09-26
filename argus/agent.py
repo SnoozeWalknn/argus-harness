@@ -226,6 +226,8 @@ class _Run:
         self.turn_mutated = False  # a mutating tool ran this turn
         self.t0 = time.perf_counter()
         self.last_prompt: int | None = None  # prompt tokens of the latest request
+        self.last_max_tokens: int | None = None
+        self.last_context_ids: list[int] = []
         self.projection_from = 0  # context index from which messages are not yet counted
 
     # -- bookkeeping -----------------------------------------------------------------------
@@ -264,21 +266,23 @@ class _Run:
             model=self.cfg.model.model,
         )
         self.rep.run_start(self.id, self.task)
-        if self.cfg.log.measure_overhead:
-            self.record_overhead()
-        if self.cfg.checkpoint.enabled:
-            self.start_checkpoints()
-        self.store.add_event(
-            self.id,
-            None,
-            "context",
-            {
-                "agents_md": [src for src, _ in a.agents_md],
-                "skills": [{"name": s.name, "path": s.path, "local": s.local} for s in a.skills],
-                "errors": a.context_errors,
-            },
-        )
         try:
+            if self.cfg.log.measure_overhead:
+                self.record_overhead()
+            if self.cfg.checkpoint.enabled:
+                self.start_checkpoints()
+            self.store.add_event(
+                self.id,
+                None,
+                "context",
+                {
+                    "agents_md": [src for src, _ in a.agents_md],
+                    "skills": [
+                        {"name": s.name, "path": s.path, "local": s.local} for s in a.skills
+                    ],
+                    "errors": a.context_errors,
+                },
+            )
             self.add({"role": "system", "content": parts.render()}, None)
             self.add({"role": "user", "content": self.task}, None)
             self.loop()
@@ -290,6 +294,9 @@ class _Run:
             self.store.add_event(self.id, self.turn, "exception", traceback.format_exc())
             self.finish("error")
         finally:
+            if self.result.status == "running":  # every exit path should have set a status
+                self.result.error = self.result.error or "run ended without a status"
+                self.finish("error")
             self.final_checkpoint()
             r = self.result
             r.wall_ms = (time.perf_counter() - t0) * 1000
@@ -348,7 +355,7 @@ class _Run:
             self.rep.turn_end(turn, c, parsed)
 
             if c.finish_reason == "length" and not parsed.calls:
-                self.fail(turn, "token_cap", f"turn hit max_tokens ({self.max_tokens()})")
+                self.fail(turn, "token_cap", f"turn hit max_tokens ({self.last_max_tokens})")
                 self.check_degenerate(turn, c)
                 self.feedback(turn, CUT_OFF)
                 if self.no_progress(turn, "token_cap"):
@@ -393,7 +400,7 @@ class _Run:
                 self.fail(
                     turn,
                     "token_cap",
-                    f"reasoning used all {self.max_tokens()} max_tokens without acting",
+                    f"reasoning used all {self.last_max_tokens} max_tokens without acting",
                 )
                 self.check_degenerate(turn, c)
             else:
@@ -479,6 +486,7 @@ class _Run:
     ) -> Completion | None:
         body = self.request(extra)
         self.last_context_ids = [mid for mid, _ in self.context]
+        self.last_max_tokens = body.get("max_tokens")
         try:
             c = self.agent.llm.chat(body, stream=self.cfg.model.stream, monitors=self.monitors())
         except ContextOverflow as e:
@@ -507,10 +515,14 @@ class _Run:
 
     def record_turn(self, turn: int, c: Completion, p: Parsed, attempt: int = 0) -> None:
         r = self.result
+        # Streamed: one chunk per token. Otherwise count the text with the server's tokenizer.
+        count = self.agent.counter.count
+        reasoning_tokens = c.reasoning_chunks or (count(c.reasoning) if c.reasoning else 0)
+        content_tokens = c.content_chunks or (count(c.content) if c.content else 0)
         r.turns = turn + 1
         r.prompt_tokens += c.prompt_tokens
         r.completion_tokens += c.completion_tokens
-        r.reasoning_tokens += c.reasoning_chunks
+        r.reasoning_tokens += reasoning_tokens
         r.max_context = max(r.max_context, c.prompt_tokens + c.completion_tokens)
         t = c.timings
         self.store.add_turn(
@@ -520,8 +532,8 @@ class _Run:
             prompt_tokens=c.prompt_tokens,
             completion_tokens=c.completion_tokens,
             cached_tokens=c.cached_tokens,
-            reasoning_tokens=c.reasoning_chunks,
-            content_tokens=c.content_chunks,
+            reasoning_tokens=reasoning_tokens,
+            content_tokens=content_tokens,
             reasoning=c.reasoning,
             content=c.content,
             tool_calls_json=[{"id": x.id, "name": x.name, "arguments": x.raw} for x in p.calls],
@@ -533,7 +545,7 @@ class _Run:
             total_ms=_r(c.total_ms),
             prompt_tps=_r(t.get("prompt_per_second")),
             gen_tps=_r(t.get("predicted_per_second")),
-            max_tokens=self.max_tokens(),
+            max_tokens=self.last_max_tokens,
             context_ids=self.last_context_ids,
             raw_response=c.raw,
         )

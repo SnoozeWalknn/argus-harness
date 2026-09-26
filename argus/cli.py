@@ -15,11 +15,15 @@ from argus.suite import SuiteError
 
 def _config(args: argparse.Namespace) -> Config:
     overrides = list(getattr(args, "override", None) or [])
-    if getattr(args, "workdir", None):
-        overrides.append(f"executor.workdir={json.dumps(str(Path(args.workdir).resolve()))}")
     if getattr(args, "db", None):
         overrides.append(f"log.db={json.dumps(args.db)}")
-    return load_config(getattr(args, "config", None), overrides)
+    workdir = getattr(args, "workdir", None)
+    if workdir:
+        overrides.append(f"executor.workdir={json.dumps(workdir)}")
+    cfg = load_config(getattr(args, "config", None), overrides)
+    if workdir and cfg.executor.kind == "local":  # an SSH workdir is a path on the remote host
+        cfg.executor.workdir = str(Path(workdir).resolve())
+    return cfg
 
 
 def _store(args: argparse.Namespace) -> Store:
