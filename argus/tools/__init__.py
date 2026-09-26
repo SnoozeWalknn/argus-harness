@@ -19,6 +19,8 @@ BUILTIN: dict[str, type[Tool]] = {
 def build_tools(cfg: ToolsConfig) -> dict[str, Tool]:
     tools: dict[str, Tool] = {}
     for name in cfg.enabled:
+        if name == "skill":  # added by the agent when skills exist
+            continue
         if name not in BUILTIN:
             raise ValueError(f"unknown tool {name!r}; available: {', '.join(BUILTIN)}")
         tool = BUILTIN[name]()

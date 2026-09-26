@@ -76,8 +76,11 @@ def q(value: str) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_shadow(tmp_path, monkeypatch):
-    """Keep shadow checkpoint repositories out of the real home directory."""
+def _isolated_home(tmp_path, monkeypatch):
+    """Keep tests away from the real home: global AGENTS.md, skills, checkpoints."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("ARGUS_SHADOW_ROOT", str(tmp_path / "shadow"))
 
 

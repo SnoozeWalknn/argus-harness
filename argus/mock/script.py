@@ -34,7 +34,7 @@ Step = dict[str, Any]
 StepFn = Callable[[dict[str, Any], Any], Step]
 
 
-def call(name: str, **args: Any) -> Step:
+def call(name: str, /, **args: Any) -> Step:
     return {"tool_calls": [{"name": name, "arguments": args}]}
 
 

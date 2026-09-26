@@ -31,6 +31,15 @@ from argus.fsstate import (
 from argus.llm import Completion, ContextOverflow, Delta, LLMClient, LLMError
 from argus.prompt import PromptParts, base_prompt
 from argus.protocols import Parsed, Protocol, ToolCall, make_protocol
+from argus.skills import (
+    Skill,
+    SkillTool,
+    discover_skills,
+    load_agents_md,
+    render_agents_md,
+    render_skill_index,
+    skill_for_path,
+)
 from argus.store import Store, new_id
 from argus.tokens import TokenCounter, measure
 from argus.tools import ToolContext, ToolError, ToolResult, build_tools
@@ -108,15 +117,40 @@ class Agent:
         self.store = store or Store(cfg.db_path())
         self.reporter = reporter or Reporter()
         self.tools: dict[str, Tool] = build_tools(cfg.tools)
+        self.agents_md: list[tuple[str, str]] = []
+        self.skills: list[Skill] = []
+        self.context_errors: list[str] = []
+        self.load_context()
+        if self.skills:
+            self.tools["skill"] = SkillTool(self.skills, self.executor)
         self.protocol: Protocol = make_protocol(cfg.agent.protocol, self.tools, cfg.agent)
         self._n_ctx: int | None = None
         self.counter = TokenCounter(self.llm)
+
+    def load_context(self) -> None:
+        """AGENTS.md files and skills. Failures are recorded, never fatal."""
+        c = self.cfg.context
+        if c.agents_md:
+            try:
+                self.agents_md = load_agents_md(self.executor, c)
+            except Exception as e:
+                self.context_errors.append(f"AGENTS.md: {type(e).__name__}: {e}")
+        if c.skills:
+            try:
+                self.skills = discover_skills(self.executor, c)
+            except Exception as e:
+                self.context_errors.append(f"skills: {type(e).__name__}: {e}")
 
     def prompt_parts(self) -> PromptParts:
         base = base_prompt(
             self.cfg.agent.system_prompt, self.executor.workdir, self.protocol.finish_hint()
         )
-        return PromptParts(base=base, protocol=self.protocol.prompt_section())
+        return PromptParts(
+            base=base,
+            protocol=self.protocol.prompt_section(),
+            agents_md=render_agents_md(self.agents_md, self.cfg.context.max_agents_md_chars),
+            skills=render_skill_index(self.skills),
+        )
 
     def context_window(self) -> int:
         if self._n_ctx is None:
@@ -221,6 +255,16 @@ class _Run:
             self.record_overhead()
         if self.cfg.checkpoint.enabled:
             self.start_checkpoints()
+        self.store.add_event(
+            self.id,
+            None,
+            "context",
+            {
+                "agents_md": [src for src, _ in a.agents_md],
+                "skills": [{"name": s.name, "path": s.path, "local": s.local} for s in a.skills],
+                "errors": a.context_errors,
+            },
+        )
         try:
             self.add({"role": "system", "content": parts.render()}, None)
             self.add({"role": "user", "content": self.task}, None)
@@ -496,6 +540,7 @@ class _Run:
                 pre = self.pre_checkpoint(turn, i, call) if tool.mutating else None
                 res, ms = self.execute_tool(call)
                 changes = self.post_check(turn, call, res, pre) if pre else None
+                self.log_skill_use(turn, call, res)
                 verdict = self.loops.observe(
                     call.name, call.args, res.text, f"{call.name}({brief_args(call.args, 60)})"
                 )
@@ -536,6 +581,26 @@ class _Run:
             self.loop_tagged.add(verdict.key)
             self.fail(turn, "loop", verdict.detail)
         res.text += f"\n[argus: {verdict.detail}. Nothing changed; try a different approach.]"
+
+    def log_skill_use(self, turn: int, call: ToolCall, res: ToolResult) -> None:
+        """Record skill loads: via the skill tool, or by reading/cat-ing a SKILL.md."""
+        for ev in self.tctx.events:
+            if ev.get("kind") == "skill":
+                self.store.add_skill_invocation(self.id, turn, ev["skill"], ev["path"], ev["via"])
+        self.tctx.events.clear()
+        skills = self.agent.skills
+        if not skills or not res.ok:
+            return
+        ex = self.agent.executor
+        if call.name == "read":
+            s = skill_for_path(skills, ex.resolve(call.args.get("path", "")))
+            if s:
+                self.store.add_skill_invocation(self.id, turn, s.name, s.path, "read")
+        elif call.name == "bash" and "SKILL.md" in call.args.get("cmd", ""):
+            cmd = call.args["cmd"]
+            for s in skills:
+                if not s.local and (s.path in cmd or ex.rel(s.path) in cmd):
+                    self.store.add_skill_invocation(self.id, turn, s.name, s.path, "bash")
 
     # -- checkpoints and filesystem checks -------------------------------------------------------
 
