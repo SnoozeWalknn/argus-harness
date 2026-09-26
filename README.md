@@ -6,6 +6,7 @@ It is also a measurement instrument: every run is logged to SQLite in enough
 detail to say why it failed and whether config B did better than config A.
 
 Design, module layout and milestones: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+A 60-second promo video and its Remotion source live in [promo/](promo/).
 
 ## Quick start
 
