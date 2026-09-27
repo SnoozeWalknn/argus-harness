@@ -59,6 +59,9 @@ class ToolContext:
     # Side channel for things the agent should log (e.g. skill invocations).
     events: list[dict[str, Any]] = field(default_factory=list)
     sandbox: Any = None  # argus.sandbox.Spec for the call being run (bash), or None
+    todos: list[dict[str, Any]] = field(default_factory=list)  # the todo tool's list
+    run_id: str = ""  # the run and turn being executed (for tools that start subagents)
+    turn: int = 0
 
 
 class Tool:

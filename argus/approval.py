@@ -204,10 +204,26 @@ class Gate:
 
     # -- decisions ---------------------------------------------------------------------------
 
-    def decide(self, tool: str, args: dict[str, Any], mutating: bool, inside: bool) -> Decision:
-        """``inside``: whether a file tool's path is inside the workspace."""
+    def decide(
+        self,
+        tool: str,
+        args: dict[str, Any],
+        mutating: bool,
+        inside: bool,
+        approver: Approver | None = None,
+    ) -> Decision:
+        """``inside``: whether a file tool's path is inside the workspace. ``approver``
+        answers instead of the gate's own (a pre_tool hook that already allowed the call)."""
+        if approver is not None:
+            saved, self.approver = self.approver, approver
+            try:
+                return self.decide(tool, args, mutating, inside)
+            finally:
+                self.approver = saved
         if tool == "bash":
             return self._bash(args.get("cmd", ""))
+        if tool == "task":  # subagents run under a policy no looser than this one
+            return Decision(True)
         if not mutating:
             return Decision(True)
         p = self.policy

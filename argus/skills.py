@@ -154,19 +154,31 @@ def render_skill_index(skills: list[Skill]) -> str:
 
 
 class SkillTool(Tool):
+    """Progressive disclosure: the prompt lists names and descriptions (level 1); ``skill(name)``
+    loads SKILL.md and lists the skill's other files (level 2); ``skill(name, file)`` loads
+    one of those files (level 3). Each load is logged."""
+
     name = "skill"
-    description = "Load the instructions of a skill listed under Skills."
-    summary = "load a skill's instructions"
+    description = (
+        "Load the instructions of a skill listed under Skills, or with file, one of the "
+        "skill's other files."
+    )
+    summary = "load a skill's instructions (file?: one of its files)"
 
     def __init__(self, skills: list[Skill], executor: Executor):
         self.skills = {s.name: s for s in skills}
         self.executor = executor
-        self.parameters = obj({"name": {"type": "string", "enum": list(self.skills)}}, ["name"])
+        self.parameters = obj(
+            {"name": {"type": "string", "enum": list(self.skills)}, "file": {"type": "string"}},
+            ["name"],
+        )
 
     def run(self, ctx: ToolContext, args: dict[str, Any]) -> ToolResult:
         skill = self.skills.get(args["name"])
         if skill is None:
             raise ToolError(f"no skill {args['name']!r}; available: {', '.join(self.skills)}")
+        if args.get("file"):
+            return self._file(ctx, skill, str(args["file"]))
         text = read_file(self.executor, skill.path, skill.local)
         _, body = parse_frontmatter(text)
         files = self._files(skill)
@@ -180,6 +192,21 @@ class SkillTool(Tool):
             footer += "; files: " + ", ".join(files)
         ctx.events.append({"kind": "skill", "skill": skill.name, "path": skill.path, "via": "tool"})
         return ToolResult(f"{body.strip()}\n{footer}]", meta={"skill": skill.name})
+
+    def _file(self, ctx: ToolContext, skill: Skill, rel: str) -> ToolResult:
+        path = posixpath.normpath(posixpath.join(skill.dir, rel))
+        if not path.startswith(skill.dir.rstrip("/") + "/"):
+            raise ToolError(f"{rel!r} is outside the skill directory")
+        try:
+            text = read_file(self.executor, path, skill.local)
+        except (FileNotFoundError, IsADirectoryError):
+            files = ", ".join(self._files(skill)) or "none"
+            raise ToolError(f"skill {skill.name} has no file {rel!r}; files: {files}") from None
+        limit = 20_000
+        if len(text) > limit:
+            text = text[:limit] + f"\n[... {len(text) - limit} more chars]"
+        ctx.events.append({"kind": "skill", "skill": skill.name, "path": path, "via": "file"})
+        return ToolResult(text, meta={"skill": skill.name, "file": rel})
 
     def _files(self, skill: Skill) -> list[str]:
         if skill.local:

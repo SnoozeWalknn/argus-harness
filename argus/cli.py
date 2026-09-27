@@ -26,6 +26,8 @@ def _config(args: argparse.Namespace) -> Config:
         overrides[:0] = model_overrides(spec)  # explicit -o still wins
     if getattr(args, "approval", None):
         overrides.insert(0, f"agent.approval={json.dumps(args.approval)}")
+    if getattr(args, "plan", False):
+        overrides.insert(0, 'agent.mode="plan"')
     if getattr(args, "record", None):
         overrides.append(f"model.record_dir={json.dumps(args.record)}")
     cfg = load_config(getattr(args, "config", None), overrides)
@@ -607,6 +609,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="approval policy (default: agent.approval, normally auto)",
     )
     r.add_argument("-y", "--yes", action="store_true", help="approve everything argus would ask")
+    r.add_argument(
+        "--plan", action="store_true", help="plan mode: explore read-only, answer with a plan"
+    )
     r.set_defaults(fn=cmd_run)
 
     ls = sub.add_parser("runs", help="list recent runs")

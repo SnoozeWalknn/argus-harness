@@ -6,6 +6,7 @@ key can be overridden from the command line with ``-o section.key=value``.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import hashlib
 import json
@@ -30,6 +31,7 @@ class ModelConfig:
     base_url: str = ""  # "" = the provider's default (llama-server: http://127.0.0.1:8080/v1)
     model: str = "qwen"
     profile: str = ""  # model profile to apply ("" = the best match for the model id)
+    tier: str = ""  # frontier | local (from the profile); decides the "auto" tool set
     api_key: str = ""  # prefer api_key_env or the provider's standard variable; never logged
     api_key_env: str = ""  # environment variable holding the key (default: the provider's)
     # Sampling: None leaves the value to llama-server's own defaults.
@@ -77,6 +79,9 @@ class AgentConfig:
     repetition_window: int = 400  # chars examined for degenerate repetition, 0 = off
     overrun_turns: int = 2  # tool turns after a completion claim before tagging overrun
     reasoning_retry: bool = True  # after a reasoning-budget abort, retry once with thinking off
+    mode: str = "build"  # build | plan (read-only exploration that ends in a plan)
+    subagents: str = "auto"  # the task tool: auto (frontier models) | on | off
+    max_stop_blocks: int = 3  # times stop hooks may send the model back to work
     approval: str = "auto"  # read-only | ask | auto | full (see argus.approval)
     headless_approval: str = "deny"  # answer to "ask" when nobody can be asked: deny | allow
 
@@ -84,6 +89,7 @@ class AgentConfig:
 @dataclass
 class ToolsConfig:
     enabled: list[str] = field(default_factory=lambda: ["read", "edit", "bash", "glob", "grep"])
+    todo: str = "auto"  # the todo tool: auto (frontier models) | on | off
     descriptions: dict[str, str] = field(default_factory=dict)  # per-tool description overrides
     read_max_lines: int = 400
     read_max_line_chars: int = 400
@@ -151,6 +157,9 @@ class ContextConfig:
     skill_dirs: list[str] = field(
         default_factory=lambda: [".agents/skills", ".claude/skills", "~/.config/argus/skills"]
     )
+    agent_dirs: list[str] = field(  # subagent definitions (*.md)
+        default_factory=lambda: [".argus/agents", ".claude/agents", "~/.config/argus/agents"]
+    )
 
 
 @dataclass
@@ -167,6 +176,14 @@ class CompactionConfig:
     api_key_env: str = ""
     max_tokens: int = 1024
     timeout: float = 120.0
+
+
+@dataclass
+class HookConfig:
+    event: str = ""  # session_start | user_prompt | pre_tool | post_tool | stop
+    command: str = ""
+    matcher: str = ""  # regex on the tool name for pre_tool / post_tool ("" = all)
+    timeout: float = 30.0
 
 
 @dataclass
@@ -187,6 +204,7 @@ class Config:
     context: ContextConfig = field(default_factory=ContextConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     log: LogConfig = field(default_factory=LogConfig)
+    hooks: list[HookConfig] = field(default_factory=list)
 
     @property
     def explicit(self) -> set[str]:
@@ -329,6 +347,16 @@ def validate(cfg: Config) -> Config:
 
     if cfg.agent.approval not in POLICIES:
         raise ConfigError(f"agent.approval must be one of {POLICIES}, got {cfg.agent.approval!r}")
+    if cfg.agent.mode not in ("build", "plan"):
+        raise ConfigError(f"agent.mode must be build or plan, got {cfg.agent.mode!r}")
+    for where, value in (("tools.todo", cfg.tools.todo), ("agent.subagents", cfg.agent.subagents)):
+        if value not in ("auto", "on", "off"):
+            raise ConfigError(f"{where} must be auto, on or off, got {value!r}")
+    from argus.hooks import EVENTS
+
+    for h in cfg.hooks:
+        if h.event not in EVENTS or not h.command:
+            raise ConfigError(f"each [[hooks]] needs an event from {EVENTS} and a command")
     if cfg.agent.headless_approval not in ("deny", "allow"):
         raise ConfigError("agent.headless_approval must be deny or allow")
     if cfg.sandbox.backend not in BACKENDS:
@@ -389,6 +417,9 @@ def load_config(
         cfg.name = name
     if profiles:
         from argus.profiles import ProfileError, apply_profile
+
+        # kept so a subagent on another model can get that model's profile instead
+        object.__setattr__(cfg, "unprofiled", copy.deepcopy(cfg))
 
         try:
             apply_profile(cfg)

@@ -233,6 +233,7 @@ def apply(cfg: Config, profile: Profile) -> dict[str, Any]:
         if key in SAMPLING_KEYS:
             put(m, "model", key, value)
     put(m, "model", "quirks", list(profile.quirks))
+    put(m, "model", "tier", profile.tier)
     put(m, "model", "pricing", dict(profile.pricing))
     if profile.chat_template_kwargs and "model.extra_body" not in explicit:
         kw = {**profile.chat_template_kwargs, **(m.extra_body.get("chat_template_kwargs") or {})}

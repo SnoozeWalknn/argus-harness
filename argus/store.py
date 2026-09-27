@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS batches (
@@ -204,6 +204,13 @@ MIGRATIONS: dict[int, list[str]] = {
             created_at REAL NOT NULL
         )""",
         "CREATE INDEX IF NOT EXISTS idx_approvals_run ON approvals(run_id)",
+    ],
+    4: [
+        "ALTER TABLE runs ADD COLUMN mode TEXT",  # build | plan
+        "ALTER TABLE runs ADD COLUMN agent TEXT",  # subagent runs: the agent name
+        "ALTER TABLE runs ADD COLUMN parent_run_id TEXT",
+        "ALTER TABLE runs ADD COLUMN parent_turn INTEGER",
+        "CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id)",
     ],
 }
 
@@ -415,6 +422,9 @@ class Store:
         if not rows:
             raise KeyError(run_id)
         return rows[0]
+
+    def children(self, run_id: str) -> list[sqlite3.Row]:
+        return self.q("SELECT * FROM runs WHERE parent_run_id = ? ORDER BY started_at", run_id)
 
     def runs(self, limit: int = 20, batch_id: str | None = None) -> list[sqlite3.Row]:
         if batch_id:

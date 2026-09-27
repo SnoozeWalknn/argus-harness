@@ -61,6 +61,9 @@ reasoning_retry = true
 #   full       no sandbox, no questions
 approval = "auto"
 headless_approval = "deny"   # answer when nobody can be asked (argus run without a TTY)
+mode = "build"             # plan: read-only exploration that ends in a plan (--plan)
+subagents = "auto"         # the task tool (fresh-context subagents): auto = frontier models
+max_stop_blocks = 3        # times stop hooks may send the model back to work
 
 [sandbox]
 backend = "auto"           # auto | bwrap | landlock | none (commands of the local executor)
@@ -70,6 +73,7 @@ required = false           # refuse to run commands when no sandbox works here
 
 [tools]
 enabled = ["read", "edit", "bash", "glob", "grep"]   # `skill` is added when skills exist
+todo = "auto"              # the todo tool: auto = frontier models (every tool costs prompt tokens)
 # descriptions = { bash = "Run a shell command." }    # override tool descriptions
 read_max_lines = 400
 require_read_before_edit = true
@@ -98,6 +102,7 @@ agents_md = true
 global_dir = "~/.config/argus"                  # global AGENTS.md
 skills = true
 skill_dirs = [".agents/skills", ".claude/skills", "~/.config/argus/skills"]
+agent_dirs = [".argus/agents", ".claude/agents", "~/.config/argus/agents"]   # subagent *.md
 
 [compaction]
 enabled = true
@@ -113,3 +118,12 @@ max_tokens = 1024
 [log]
 # db = "~/.local/share/argus/argus.db"   # or $ARGUS_DB
 measure_overhead = true
+
+# Hooks run your commands at points of a run (event JSON on stdin). Exit 2 blocks:
+# pre_tool denies the call, stop sends the model back to work, user_prompt stops
+# the run; post_tool stdout / stderr is added to the tool result.
+# [[hooks]]
+# event = "pre_tool"         # session_start | user_prompt | pre_tool | post_tool | stop
+# matcher = "bash"           # regex on the tool name
+# command = "~/.config/argus/hooks/guard.py"
+# timeout = 30

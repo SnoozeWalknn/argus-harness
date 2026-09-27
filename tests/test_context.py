@@ -119,7 +119,8 @@ def test_skill_under_constrained_protocols(make_agent, skilled, protocol):
     r = agent.run("x")
     assert r.status == "completed" and not server.errors
     assert (
-        "skill(name) - load a skill's instructions" in server.requests[0]["messages"][0]["content"]
+        "skill(name, file?) - load a skill's instructions"
+        in server.requests[0]["messages"][0]["content"]
     )
     # a skill name outside the enum cannot be produced under the constraint
     agent2, server2 = make_agent(

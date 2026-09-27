@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import time
 import traceback
@@ -11,7 +12,7 @@ from typing import Any
 
 from argus.approval import Approver, Decision, FixedApprover, Gate, looks_denied
 from argus.compact import HEAD, SUMMARY_PREFIX, Compaction, Compactor
-from argus.config import Config, ConfigError
+from argus.config import Config, ConfigError, apply_override
 from argus.detect import (
     LoopDetector,
     LoopVerdict,
@@ -31,7 +32,8 @@ from argus.fsstate import (
     mass_deletion,
     summarize,
 )
-from argus.profiles import turn_cost
+from argus.hooks import HookResult, Hooks
+from argus.profiles import apply_profile, turn_cost
 from argus.prompt import PromptParts, base_prompt
 from argus.protocols import Parsed, Protocol, ToolCall, make_protocol
 from argus.providers import Provider, provider_from_config, strip_replay
@@ -49,10 +51,20 @@ from argus.skills import (
     skill_for_path,
 )
 from argus.store import Store, new_id
+from argus.subagents import BUILTIN as SUBAGENTS
+from argus.subagents import AgentDef, TaskTool, stricter
+from argus.subagents import discover as discover_agents
 from argus.tokens import TokenCounter, measure
+from argus.tools import BUILTIN as BUILTIN_TOOLS
 from argus.tools import ToolContext, ToolError, ToolResult, build_tools
 from argus.tools.base import Tool, digest
+from argus.tools.todo import TodoTool
 
+PLAN_PROMPT = (
+    "You are in plan mode: explore the code with the read-only tools (commands cannot "
+    "change files), then reply with a concise, numbered implementation plan: which files "
+    "change, how, and how to verify it. Make no changes."
+)
 CUT_OFF = (
     "Your reply was cut off at the output token limit. Be brief: make one tool call, "
     "or give the final answer."
@@ -70,6 +82,13 @@ class Reporter:
     def tool_start(self, turn: int, call: ToolCall) -> None: ...
     def tool_end(self, turn: int, call: ToolCall, result: ToolResult, ms: float) -> None: ...
     def failure(self, turn: int | None, tag: str, detail: str) -> None: ...
+    def todos(self, turn: int, items: list[dict[str, Any]]) -> None: ...
+    def hook(self, event: str, result: HookResult) -> None: ...
+
+    def child(self, name: str) -> Reporter:
+        """Reporter for a subagent's run."""
+        return self
+
     def approval(self, turn: int, call: ToolCall, decision: Decision) -> None: ...
     def note(self, text: str) -> None: ...
     def run_end(self, result: RunResult) -> None: ...
@@ -122,27 +141,99 @@ class Agent:
         store: Store | None = None,
         reporter: Reporter | None = None,
         approver: Approver | None = None,
+        subagent: AgentDef | None = None,
+        shared: bool = False,
     ):
         self.cfg = cfg
+        self.subagent = subagent  # set when this agent runs as another agent's subagent
+        self.shared = shared  # the executor (and maybe the provider) belong to a parent agent
+        self._own_llm = llm is None
         self.executor = executor or make_executor(cfg.executor, cfg.tools.capture_bytes)
         self.llm: Provider = llm or provider_from_config(cfg.model)
         self.store = store or Store(cfg.db_path())
         self.reporter = reporter or Reporter()
         self.notes: list[str] = []  # decisions made while setting up, logged with each run
+        self.extra_prompt: list[str] = []  # plan mode, subagent instructions
         self.check_protocol()
+        if cfg.agent.mode == "plan":
+            cfg.agent.approval = stricter(cfg.agent.approval, "read-only")
+            self.extra_prompt.append(PLAN_PROMPT)
+        if subagent is not None and subagent.prompt:
+            self.extra_prompt.append(subagent.prompt)
         self.gate = self.make_gate(approver)
+        self.hooks = Hooks(
+            cfg.hooks,
+            self.executor.workdir,
+            self.executor.workdir if self.executor.kind == "local" else None,
+        )
         self._pricing: dict[str, float] | None = None
-        self.tools: dict[str, Tool] = build_tools(cfg.tools)
         self.agents_md: list[tuple[str, str]] = []
         self.skills: list[Skill] = []
+        self.agent_defs: list[AgentDef] = []
         self.context_errors: list[str] = []
         self.load_context()
-        if self.skills:
-            self.tools["skill"] = SkillTool(self.skills, self.executor)
+        self.tools: dict[str, Tool] = self.build_tool_set()
         self.protocol: Protocol = make_protocol(cfg.agent.protocol, self.tools, cfg.agent)
         self._n_ctx: int | None = None
         self.counter = TokenCounter(self.llm)
         self.compactor = Compactor(cfg.compaction, self.counter)
+
+    def wants(self, setting: str) -> bool:
+        """``auto`` features (todo, subagents) are on for frontier models only: every tool
+        costs prompt tokens, and small local models do better with fewer."""
+        return setting == "on" or (setting == "auto" and self.cfg.model.tier == "frontier")
+
+    def build_tool_set(self) -> dict[str, Tool]:
+        cfg = self.cfg
+        tools = build_tools(cfg.tools)
+        if self.wants(cfg.tools.todo) and self.subagent is None:
+            tools["todo"] = TodoTool()
+        if self.skills:
+            tools["skill"] = SkillTool(self.skills, self.executor)
+        if self.wants(cfg.agent.subagents) and self.subagent is None:
+            tools["task"] = TaskTool(self, self.agent_defs or list(SUBAGENTS))
+        if cfg.agent.mode == "plan":
+            tools.pop("edit", None)
+            if not self.gate.sandboxed:
+                tools.pop("bash", None)  # nothing could keep commands read-only
+        return tools
+
+    def spawn(self, d: AgentDef, prompt: str, parent_run: str, parent_turn: int) -> RunResult:
+        """Run a subagent with a fresh context in the same workspace; returns its result."""
+        from argus.cli import model_overrides
+
+        base = getattr(self.cfg, "unprofiled", None) if d.model else None
+        if d.model and base is not None:
+            cfg = copy.deepcopy(base)
+            for o in model_overrides(d.model):
+                apply_override(cfg, o)
+            apply_profile(cfg)
+        else:
+            cfg = copy.deepcopy(self.cfg)
+        cfg.name = f"{self.cfg.name}/{d.name}"
+        cfg.agent.mode = "build"
+        cfg.agent.subagents = "off"
+        cfg.agent.approval = stricter(self.cfg.agent.approval, d.approval)
+        if d.tools is not None:
+            cfg.tools.enabled = [t for t in d.tools if t in BUILTIN_TOOLS]
+        if d.max_turns:
+            cfg.agent.max_turns = d.max_turns
+        same_model = not d.model or cfg.model.model == self.cfg.model.model
+        child = Agent(
+            cfg,
+            executor=self.executor,
+            llm=self.llm if same_model else None,
+            store=self.store,
+            reporter=self.reporter.child(d.name),
+            approver=self.gate.approver,
+            subagent=d,
+            shared=True,
+        )
+        child.gate.always = self.gate.always  # "always" answers hold for the whole session
+        try:
+            return child.run(prompt, parent=(parent_run, parent_turn))
+        finally:
+            child.close()
 
     def check_protocol(self) -> None:
         """Fail on a protocol the provider cannot serve if the user asked for it; if it came
@@ -208,6 +299,11 @@ class Agent:
     def load_context(self) -> None:
         """AGENTS.md files and skills. Failures are recorded, never fatal."""
         c = self.cfg.context
+        if self.wants(self.cfg.agent.subagents) and self.subagent is None:
+            try:
+                self.agent_defs = discover_agents(self.executor, c.agent_dirs)
+            except Exception as e:
+                self.context_errors.append(f"agents: {type(e).__name__}: {e}")
         if c.agents_md:
             try:
                 self.agents_md = load_agents_md(self.executor, c)
@@ -228,6 +324,7 @@ class Agent:
             protocol=self.protocol.prompt_section(),
             agents_md=render_agents_md(self.agents_md, self.cfg.context.max_agents_md_chars),
             skills=render_skill_index(self.skills),
+            extra=list(self.extra_prompt),
         )
 
     def context_window(self) -> int:
@@ -275,16 +372,19 @@ class Agent:
         batch_id: str | None = None,
         variant: str | None = None,
         after_turn: Callable[[int, _Run], None] | None = None,
+        parent: tuple[str, int] | None = None,
     ) -> RunResult:
         """Run one task. ``after_turn(turn, run)`` is called after each tool turn."""
-        run = _Run(self, task, task_id=task_id, batch_id=batch_id, variant=variant)
+        run = _Run(self, task, task_id=task_id, batch_id=batch_id, variant=variant, parent=parent)
         run.after_turn = after_turn
         return run.execute()
 
     def close(self) -> None:
         self.compactor.close()
-        self.llm.close()
-        self.executor.close()
+        if not self.shared or self._own_llm:
+            self.llm.close()
+        if not self.shared:
+            self.executor.close()
 
 
 class _Run:
@@ -300,7 +400,8 @@ class _Run:
         self.meta = meta
         self.id = new_id()
         self.result = RunResult(self.id)
-        self.tctx = ToolContext(agent.executor, self.cfg.tools)
+        self.tctx = ToolContext(agent.executor, self.cfg.tools, run_id=self.id)
+        self.stop_blocks = 0  # times a stop hook sent the model back to work
         self.context: list[tuple[int, dict[str, Any]]] = []  # (message id, message)
         self.turn = 0
         a = self.cfg.agent
@@ -339,6 +440,7 @@ class _Run:
         a = self.agent
         t0 = time.perf_counter()
         parts = a.prompt_parts()
+        parent = self.meta.get("parent") or (None, None)
         self.store.start_run(
             self.id,
             task=self.task,
@@ -353,6 +455,10 @@ class _Run:
             protocol=self.protocol.name,
             provider=a.llm.describe(),
             model=self.cfg.model.model,
+            mode=self.cfg.agent.mode,
+            agent=a.subagent.name if a.subagent else None,
+            parent_run_id=parent[0],
+            parent_turn=parent[1],
         )
         self.rep.run_start(self.id, self.task)
         try:
@@ -387,8 +493,19 @@ class _Run:
                     "errors": a.context_errors,
                 },
             )
+            for res in self.hook("session_start", None, {"task": self.task}):
+                if res.ok and res.stdout.strip():
+                    parts.extra.append(res.stdout.strip())
+            task = self.task
+            for res in self.hook("user_prompt", None, {"prompt": self.task}):
+                if res.blocked:
+                    self.fail(None, "blocked", f"user_prompt hook: {res.stderr.strip()[:300]}")
+                    self.finish("failed")
+                    return self.result
+                if res.ok and res.stdout.strip():
+                    task += f"\n\n{res.stdout.strip()}"
             self.add({"role": "system", "content": parts.render()}, None)
-            self.add({"role": "user", "content": self.task}, None)
+            self.add({"role": "user", "content": task}, None)
             self.loop()
         except KeyboardInterrupt:
             self.fail(self.turn, "interrupted", "KeyboardInterrupt")
@@ -443,6 +560,7 @@ class _Run:
         cfg = self.cfg.agent
         for turn in range(cfg.max_turns):
             self.turn = turn
+            self.tctx.turn = turn
             self.turn_mutated = False
             if self.over_budget(turn):
                 return
@@ -473,7 +591,10 @@ class _Run:
                     return
                 continue
             if parsed.final is not None:
-                self.finish("completed", self.check_final(turn, c, parsed.final))
+                final = self.check_final(turn, c, parsed.final)
+                if self.stop_blocked(turn, final):
+                    continue
+                self.finish("completed", final)
                 return
             self.check_claims(turn, parsed)
             valid = self.run_calls(turn, parsed)
@@ -525,6 +646,30 @@ class _Run:
             break
         self.finish("failed")
         return None
+
+    # -- hooks -----------------------------------------------------------------------------------
+
+    def hook(
+        self, event: str, turn: int | None, payload: dict[str, Any], tool: str = ""
+    ) -> list[HookResult]:
+        results = self.agent.hooks.run(event, self.id, payload, tool)
+        for r in results:
+            self.store.add_event(self.id, turn, "hook", {"event": event, **r.to_dict()})
+            self.rep.hook(event, r)
+        return results
+
+    def stop_blocked(self, turn: int, final: str) -> bool:
+        """Stop hooks may send the model back to work (a bounded number of times)."""
+        if self.stop_blocks >= self.cfg.agent.max_stop_blocks:
+            return False
+        feedback = [
+            r.stderr.strip() for r in self.hook("stop", turn, {"final": final}) if r.blocked
+        ]
+        if not feedback:
+            return False
+        self.stop_blocks += 1
+        self.feedback(turn, "\n".join(f or "A stop hook asked you to continue." for f in feedback))
+        return True
 
     def no_progress(self, turn: int, tag: str) -> bool:
         """Count a turn without a valid call; abort after agent.max_malformed in a row."""
@@ -728,6 +873,7 @@ class _Run:
                 if call.name == "bash" and decision.sandbox != OFF:
                     res, ms = self.maybe_escalate(turn, call, decision, res, ms)
                 changes = self.post_check(turn, call, res, pre) if pre else None
+                self.post_tool_hooks(turn, call, res)
                 self.log_skill_use(turn, call, res)
                 verdict = self.loops.observe(
                     call.name, call.args, res.text, f"{call.name}({brief_args(call.args, 60)})"
@@ -775,6 +921,9 @@ class _Run:
         for ev in self.tctx.events:
             if ev.get("kind") == "skill":
                 self.store.add_skill_invocation(self.id, turn, ev["skill"], ev["path"], ev["via"])
+            elif ev.get("kind") == "todo":
+                self.store.add_event(self.id, turn, "todo", ev["items"])
+                self.rep.todos(turn, ev["items"])
         self.tctx.events.clear()
         skills = self.agent.skills
         if not skills or not res.ok:
@@ -981,13 +1130,39 @@ class _Run:
             self.store.add_event(self.id, self.turn, "checkpoint_error", str(e))
 
     def approve(self, turn: int, call: ToolCall, tool: Tool) -> Decision:
-        """Ask the approval gate; log decisions worth knowing about."""
+        """pre_tool hooks, then the approval gate; logs decisions worth knowing about."""
         path = call.args.get("path") if isinstance(call.args.get("path"), str) else None
         inside = path is None or self.agent.executor.inside_workdir(path)
-        d = self.agent.gate.decide(call.name, call.args, tool.mutating, inside)
+        verdict = None
+        for res in self.hook("pre_tool", turn, {"tool": call.name, "args": call.args}, call.name):
+            if res.blocked:
+                d = Decision(
+                    False, reason=f"blocked by a hook: {res.stderr.strip()[:500]}", source="hook"
+                )
+                self.log_decision(turn, call, d)
+                return d
+            verdict = res.decision() or verdict
+        if verdict and verdict["decision"] == "deny":
+            d = Decision(
+                False, reason=f"denied by a hook: {verdict.get('reason', '')}", source="hook"
+            )
+            self.log_decision(turn, call, d)
+            return d
+        approver = FixedApprover("yes") if verdict else None  # a hook said allow
+        d = self.agent.gate.decide(call.name, call.args, tool.mutating, inside, approver)
+        if verdict:
+            d.source = "hook" if d.asked else d.source
         if tool.mutating or not d.allow or d.asked:
             self.log_decision(turn, call, d)
         return d
+
+    def post_tool_hooks(self, turn: int, call: ToolCall, res: ToolResult) -> None:
+        payload = {"tool": call.name, "args": call.args, "ok": res.ok, "result": res.text}
+        for r in self.hook("post_tool", turn, payload, call.name):
+            if r.blocked and r.stderr.strip():
+                res.text += f"\n[hook feedback: {r.stderr.strip()}]"
+            elif r.ok and r.stdout.strip():
+                res.text += f"\n[hook: {r.stdout.strip()}]"
 
     def log_decision(self, turn: int, call: ToolCall, d: Decision) -> None:
         summary = call.args.get("cmd") or call.args.get("path") or ""

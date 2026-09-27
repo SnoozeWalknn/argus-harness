@@ -48,16 +48,40 @@ def first_line(text: str, limit: int = 100) -> str:
 
 class ConsoleReporter(Reporter):
     def __init__(
-        self, stream: TextIO | None = None, verbose: bool = False, color: bool | None = None
+        self,
+        stream: TextIO | None = None,
+        verbose: bool = False,
+        color: bool | None = None,
+        prefix: str = "",
     ):
         self.out = stream or sys.stderr
         self.verbose = verbose
         self.s = Style(self.out, color)
         self._streaming: str | None = None
+        self.prefix = prefix  # subagent output is indented under the parent's
 
     def _p(self, text: str) -> None:
         self._end_stream()
+        if self.prefix:
+            text = "\n".join(self.prefix + line for line in text.split("\n"))
         print(text, file=self.out, flush=True)
+
+    def child(self, name: str) -> ConsoleReporter:
+        return ConsoleReporter(
+            self.out, self.verbose, self.s.color, prefix=self.prefix + self.s.dim(f"{name} │ ")
+        )
+
+    def todos(self, turn: int, items: list[dict[str, Any]]) -> None:
+        from argus.tools.todo import MARKS
+
+        for i in items:
+            line = f"    {MARKS[i['status']]} {i['content']}"
+            self._p(self.s.dim(line) if i["status"] == "done" else line)
+
+    def hook(self, event: str, result: Any) -> None:
+        if result.blocked or result.error or not result.ok:
+            why = result.error or first_line(result.stderr) or f"exit {result.code}"
+            self._p(self.s.yellow(f"    ↯ {event} hook: {why}"))
 
     def _end_stream(self) -> None:
         if self._streaming:
@@ -151,6 +175,25 @@ def render_run(store: Any, run_id: str, full: bool = False, color: bool | None =
         lines.append(f"batch:     {run['batch_id']} variant={run['variant']} task={run['task_id']}")
     if run["check_passed"] is not None:
         lines.append(f"check:     {'passed' if run['check_passed'] else 'FAILED'}")
+    if run["parent_run_id"]:
+        lines.append(
+            f"subagent:  {run['agent']} of run {run['parent_run_id']} (turn {run['parent_turn']})"
+        )
+    if run["mode"] == "plan":
+        lines.append("mode:      plan (read-only)")
+    children = store.children(run_id)
+    for ch in children:
+        lines.append(
+            f"subagent:  {ch['agent']} → run {ch['id']} ({ch['status']}, {ch['n_turns']} turns)"
+        )
+    todos = store.events(run_id, "todo")
+    if todos:
+        from argus.tools.todo import render
+
+        lines.append(
+            "todo:      "
+            + render(json.loads(todos[-1]["data_json"])).replace("\n", "\n           ")
+        )
     fails = store.failures(run_id)
     if fails:
         lines.append("failures:  " + ", ".join(f"{f['tag']}@{f['turn_idx']}" for f in fails))
