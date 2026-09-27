@@ -1,5 +1,8 @@
 # argus — architecture proposal
 
+> The model-agnostic extension (cloud providers, profiles, sandboxing, sessions,
+> TUI) is proposed in [MODEL-AGNOSTIC.md](MODEL-AGNOSTIC.md).
+
 A personal, headless coding-agent harness for a local Qwen model behind
 `llama-server` (OpenAI-compatible, `127.0.0.1`). The harness is also a
 measurement instrument: every run is logged to SQLite in enough detail to
