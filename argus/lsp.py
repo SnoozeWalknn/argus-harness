@@ -351,7 +351,7 @@ class Diagnostics:
         c = self.client(lang)
         if c is None:
             return None
-        report = Report(path, c.argv[0] if c.argv[0] != "ssh" else " ".join(c.argv[-1:]))
+        report = Report(path, server_name(c.argv))
         try:
             before = c.update(path, text, language_id)
             items = c.wait_diagnostics(path, before, self.cfg.wait_ms / 1000)
@@ -378,3 +378,13 @@ class Diagnostics:
         for c in self.clients.values():
             c.close()
         self.clients.clear()
+
+
+def server_name(argv: list[str]) -> str:
+    """A short name for reports: ``pyright``, not ``/home/me/.venv/bin/pyright``."""
+    if argv and argv[0] == "ssh":
+        return " ".join(argv[-1:])
+    name = posixpath.basename(argv[0]) if argv else "lsp"
+    if name.startswith("python") and len(argv) > 1:  # python path/to/server.py
+        name = posixpath.basename(argv[1]).removesuffix(".py")
+    return name

@@ -286,6 +286,7 @@ def test_edit_result_carries_diagnostics(make_agent, workspace):
         'reports after this edit:\ncalc.py:2:12 error: "undefined_name" is not defined (fake-lsp)'
         in bad["result"]
     )
+    assert "[fake_lsp reports after this edit:" in bad["result"]  # a short server name
     assert "reports after this edit" not in good["result"]
     events = agent.store.events(result.run_id, "diagnostics")
     assert len(events) == 2 and json.loads(events[1]["data_json"])["items"] == []
