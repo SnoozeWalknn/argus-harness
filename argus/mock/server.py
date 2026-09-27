@@ -113,15 +113,19 @@ class MockServer:
         strict: bool = True,
         flavor: str = "llama_server",
         num_ctx: int | None = None,
-        enforce_thinking_binding: bool = True,
+        verify_signatures: bool = True,
+        gemini_ids: bool = False,
     ):
         if flavor not in FLAVORS:
             raise ValueError(f"unknown mock flavor {flavor!r}; choose from {', '.join(FLAVORS)}")
         self.script = script if isinstance(script, Script) else Script(script or [])
         self.flavor = flavor  # which OpenAI-compatible server to imitate
         self.num_ctx = num_ctx  # ollama: the model's num_ctx parameter, if set
-        # anthropic: reject replayed thinking blocks whose conversation prefix changed
-        self.enforce_thinking_binding = enforce_thinking_binding
+        # Check opaque replay tokens the way the APIs do: Anthropic thinking signatures
+        # (bound to the conversation prefix), OpenAI encrypted reasoning (bound to the
+        # model), Gemini 3 thought signatures. Off when replaying real recordings.
+        self.verify_signatures = verify_signatures
+        self.gemini_ids = gemini_ids  # gemini: include ids in function calls (newer models do)
         self.n_ctx = n_ctx
         self.host = host
         self.model = model
@@ -416,7 +420,21 @@ class _Handler(BaseHTTPRequestHandler):
                 "top_provider": {"context_length": m.n_ctx, "max_completion_tokens": 16384},
             }
             self._json(200, {"data": [row]})
+        elif path.startswith("/v1beta/models/"):
+            name = path.removeprefix("/v1beta/models/")
+            self._json(
+                200,
+                {
+                    "name": f"models/{name}",
+                    "displayName": name,
+                    "inputTokenLimit": m.n_ctx,
+                    "outputTokenLimit": 65536,
+                    "supportedGenerationMethods": ["generateContent", "countTokens"],
+                    "thinking": True,
+                },
+            )
         elif path.startswith("/v1/models/"):
+            # Anthropic's model object, plus Gemini's fields (its API also has a v1 path)
             name = path.removeprefix("/v1/models/")
             self._json(
                 200,
@@ -427,6 +445,10 @@ class _Handler(BaseHTTPRequestHandler):
                     "created_at": "2026-01-01T00:00:00Z",
                     "max_input_tokens": m.n_ctx,
                     "max_tokens": 64000,
+                    "name": f"models/{name}",
+                    "inputTokenLimit": m.n_ctx,
+                    "outputTokenLimit": 65536,
+                    "thinking": True,
                 },
             )
         elif path in ("/v1/models", "/models") and f != "openrouter":
@@ -479,6 +501,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._chat(body)
         elif path == "/v1/messages":
             self._anthropic(body)
+        elif path == "/v1/responses":
+            self._responses(body)
+        elif path.startswith(("/v1beta/models/", "/v1/models/")) and ":" in path:
+            model, _, method = path.split("/models/", 1)[1].partition(":")
+            self._gemini(model, method, body)
         elif path == "/v1/messages/count_tokens":
             from argus.mock import anthropic as fmt
 
@@ -737,7 +764,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         prompt = m.prompt_tokens(canon)
         problems = fmt.validate(req) if m.strict else []
-        bad_sig = fmt.check_signatures(req) if m.enforce_thinking_binding else None
+        bad_sig = fmt.check_signatures(req) if m.verify_signatures else None
         if problems or bad_sig or len(prompt) > m.n_ctx:
             self._log_request(req, canon)
             if problems:
@@ -885,6 +912,179 @@ class _Handler(BaseHTTPRequestHandler):
                 },
             )
             send("message_stop", {"type": "message_stop"})
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            with m._lock:
+                m.aborted += 1
+
+    # -- OpenAI Responses API ------------------------------------------------------------------
+
+    def _responses(self, req: dict[str, Any]) -> None:
+        from argus.mock import openai_responses as fmt
+
+        m = self.mock
+        canon = fmt.to_canonical(req)
+        auth = self.headers.get("authorization") or ""
+        if not auth.startswith("Bearer ") or len(auth) <= 7:
+            self._log_request(req, canon)
+            body = fmt.error_body(None, "You didn't provide an API key.")
+            self._json(401, body)
+            return
+        prompt = m.prompt_tokens(canon)
+        problem = fmt.validate(req, m.verify_signatures) if m.strict else None
+        if problem or len(prompt) > m.n_ctx:
+            self._log_request(req, canon)
+            if problem:
+                status, code, message = problem
+                if code != "invalid_encrypted_content":
+                    m.errors.append(f"invalid responses request: {message}")
+                self._json(status, fmt.error_body(code, message))
+            else:
+                message = (
+                    "Your input exceeds the context window of this model. "
+                    "Please adjust your input and try again."
+                )
+                self._json(400, fmt.error_body("context_length_exceeded", message))
+            return
+        step = self._take_step(req, canon)
+        if step is None:
+            return
+        if step.get("replay"):
+            self._replay(step["replay"])
+            return
+        if step.get("error"):
+            e = step["error"]
+            status = int(e.get("status", 500))
+            kind = e.get("type") or ("rate_limit_exceeded" if status == 429 else "server_error")
+            self._json(
+                status, fmt.error_body(kind, e.get("message", "mock error"), kind), e.get("headers")
+            )
+            return
+        reasoning_cfg = req.get("reasoning")
+        think_on = reasoning_cfg is not None and reasoning_cfg.get("effort") != "minimal"
+        cache_n = m.cache_hit(prompt)
+        g, pieces, n_gen = m.plan(
+            canon,
+            step,
+            len(prompt),
+            id_prefix="call_mock_",
+            keep_partial_tools=True,
+            reasoning=think_on,
+        )
+        output = fmt.build_output(req, step, g, pieces, m._counter)
+        n_reasoning = sum(1 for k, _ in pieces if k == "reasoning")
+        usage = fmt.usage(len(prompt), cache_n, n_gen, n_reasoning)
+        base = fmt.response_object(
+            f"resp_mock_{next(m._counter)}", req, output, usage, g.finish_reason == "length"
+        )
+        m.record_response(g, pieces, usage)
+        if not req.get("stream"):
+            self._json(200, base)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        delay = float(step.get("chunk_delay", m.chunk_delay))
+        try:
+            for name, data in fmt.stream_events(base, output, pieces):
+                if step.get("stream_error") and name in (
+                    "response.completed",
+                    "response.incomplete",
+                ):
+                    err = {
+                        "type": "error",
+                        "code": "server_error",
+                        "message": "The server had an error",
+                    }
+                    self.wfile.write(f"event: error\ndata: {json.dumps(err)}\n\n".encode())
+                    return
+                if delay and name.endswith(".delta"):
+                    time.sleep(delay)
+                self.wfile.write(f"event: {name}\ndata: {json.dumps(data)}\n\n".encode())
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            with m._lock:
+                m.aborted += 1
+
+    # -- Gemini API ------------------------------------------------------------------------------
+
+    def _gemini(self, model: str, method: str, req: dict[str, Any]) -> None:
+        from argus.mock import gemini as fmt
+
+        m = self.mock
+        if method == "countTokens":
+            inner = req.get("generateContentRequest") or req
+            n = len(m.prompt_tokens(fmt.to_canonical(model, inner)))
+            self._json(200, {"totalTokens": n})
+            return
+        canon = fmt.to_canonical(model, req)
+        if not self.headers.get("x-goog-api-key"):
+            self._log_request(req, canon)
+            self._json(403, fmt.error_body(403, "PERMISSION_DENIED", "API key required"))
+            return
+        prompt = m.prompt_tokens(canon)
+        problem = fmt.validate(model, req, m.verify_signatures) if m.strict else None
+        if problem or len(prompt) > m.n_ctx:
+            self._log_request(req, canon)
+            if problem:
+                if "thought_signature" not in problem:
+                    m.errors.append(f"invalid gemini request: {problem}")
+                self._json(400, fmt.error_body(400, "INVALID_ARGUMENT", problem))
+            else:
+                message = (
+                    f"The input token count ({len(prompt)}) exceeds the maximum number of "
+                    f"tokens allowed ({m.n_ctx})."
+                )
+                self._json(400, fmt.error_body(400, "INVALID_ARGUMENT", message))
+            return
+        step = self._take_step(req, canon)
+        if step is None:
+            return
+        if step.get("replay"):
+            self._replay(step["replay"])
+            return
+        if step.get("error"):
+            e = step["error"]
+            status = int(e.get("status", 500))
+            kind = {429: "RESOURCE_EXHAUSTED", 503: "UNAVAILABLE"}.get(status, "INTERNAL")
+            body = fmt.error_body(status, e.get("type") or kind, e.get("message", "mock error"))
+            self._json(status, body, e.get("headers"))
+            return
+        tc = (req.get("generationConfig") or {}).get("thinkingConfig") or {}
+        think_on = tc.get("thinkingBudget") != 0
+        show = bool(tc.get("includeThoughts"))
+        cache_n = m.cache_hit(prompt)
+        g, pieces, n_gen = m.plan(
+            canon,
+            step,
+            len(prompt),
+            id_prefix="gcall_",
+            keep_partial_tools=True,
+            reasoning=think_on,
+        )
+        finish = fmt.finish_reason(step, g.finish_reason)
+        if step.get("refusal"):
+            pieces, g.tool_calls = [], []
+        n_thoughts = sum(1 for k, _ in pieces if k == "reasoning")
+        usage = fmt.usage(len(prompt), cache_n, len(pieces) - n_thoughts, n_thoughts)
+        chunks = fmt.chunks(model, step, pieces, g.tool_calls, finish, usage, show, m.gemini_ids)
+        m.record_response(g, pieces, usage)
+        if method != "streamGenerateContent":
+            self._json(200, fmt.merged(chunks))
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        delay = float(step.get("chunk_delay", m.chunk_delay))
+        try:
+            for ch in chunks:
+                if delay:
+                    time.sleep(delay)
+                self.wfile.write(f"data: {json.dumps(ch)}\r\n\r\n".encode())
+                self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             with m._lock:
                 m.aborted += 1

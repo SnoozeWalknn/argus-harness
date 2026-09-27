@@ -1,0 +1,117 @@
+{
+ "format": 1,
+ "source": "documented",
+ "flavor": "",
+ "quirks": [],
+ "description": "400 INVALID_ARGUMENT: input token count exceeds the limit",
+ "provider": "gemini",
+ "model": "gemini-2.5-pro",
+ "stream": true,
+ "canonical": {
+  "model": "gemini-2.5-pro",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "max_tokens": 32000
+ },
+ "request": {
+  "method": "POST",
+  "path": "/models/gemini-2.5-pro:streamGenerateContent",
+  "body": {
+   "contents": [
+    {
+     "role": "user",
+     "parts": [
+      {
+       "text": "test_add fails; fix calc.py"
+      }
+     ]
+    }
+   ],
+   "systemInstruction": {
+    "parts": [
+     {
+      "text": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+     }
+    ]
+   },
+   "tools": [
+    {
+     "functionDeclarations": [
+      {
+       "name": "read",
+       "description": "Show a file with line numbers",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "path": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "path"
+        ]
+       }
+      }
+     ]
+    }
+   ],
+   "toolConfig": {
+    "functionCallingConfig": {
+     "mode": "AUTO"
+    }
+   },
+   "generationConfig": {
+    "maxOutputTokens": 32000,
+    "thinkingConfig": {
+     "thinkingBudget": -1,
+     "includeThoughts": true
+    }
+   }
+  }
+ },
+ "response": {
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "json": {
+   "error": {
+    "code": 400,
+    "message": "The input token count (1100391) exceeds the maximum number of tokens allowed (1048576).",
+    "status": "INVALID_ARGUMENT"
+   }
+  }
+ },
+ "expect_error": "ContextOverflow"
+}

@@ -1,0 +1,214 @@
+{
+ "format": 1,
+ "source": "documented",
+ "flavor": "",
+ "quirks": [],
+ "description": "streamGenerateContent (alt=sse): a thought summary, then a function call carrying the thought signature; no call id",
+ "provider": "gemini",
+ "model": "gemini-2.5-pro",
+ "stream": true,
+ "canonical": {
+  "model": "gemini-2.5-pro",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "max_tokens": 32000
+ },
+ "request": {
+  "method": "POST",
+  "path": "/models/gemini-2.5-pro:streamGenerateContent",
+  "body": {
+   "contents": [
+    {
+     "role": "user",
+     "parts": [
+      {
+       "text": "test_add fails; fix calc.py"
+      }
+     ]
+    }
+   ],
+   "systemInstruction": {
+    "parts": [
+     {
+      "text": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+     }
+    ]
+   },
+   "tools": [
+    {
+     "functionDeclarations": [
+      {
+       "name": "read",
+       "description": "Show a file with line numbers",
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "path": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "path"
+        ]
+       }
+      }
+     ]
+    }
+   ],
+   "toolConfig": {
+    "functionCallingConfig": {
+     "mode": "AUTO"
+    }
+   },
+   "generationConfig": {
+    "maxOutputTokens": 32000,
+    "thinkingConfig": {
+     "thinkingBudget": -1,
+     "includeThoughts": true
+    }
+   }
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "text/event-stream"
+  },
+  "sse": [
+   {
+    "data": {
+     "candidates": [
+      {
+       "content": {
+        "parts": [
+         {
+          "text": "**Inspecting the file**\n\nThe test checks addition, so I should read calc.py.",
+          "thought": true
+         }
+        ],
+        "role": "model"
+       },
+       "index": 0
+      }
+     ],
+     "usageMetadata": {
+      "promptTokenCount": 1387,
+      "totalTokenCount": 1387,
+      "promptTokensDetails": [
+       {
+        "modality": "TEXT",
+        "tokenCount": 1387
+       }
+      ]
+     },
+     "modelVersion": "gemini-2.5-pro",
+     "responseId": "k3XbaPqWLo2Q0-kP4pfYsQE"
+    }
+   },
+   {
+    "data": {
+     "candidates": [
+      {
+       "content": {
+        "parts": [
+         {
+          "functionCall": {
+           "name": "read",
+           "args": {
+            "path": "calc.py"
+           }
+          },
+          "thoughtSignature": "CiQB0e2Kb3w1v5kP9xR2sT7yU4aB6cD8eF0gH1iJ3kL5mN7oP9qR2sT4uV6wX8yZ0aB2cD4eF6gH8iJ0kL2mN4oP6qR8sT0uV2wX4yZ6"
+         }
+        ],
+        "role": "model"
+       },
+       "finishReason": "STOP",
+       "index": 0
+      }
+     ],
+     "usageMetadata": {
+      "promptTokenCount": 1387,
+      "candidatesTokenCount": 16,
+      "totalTokenCount": 1521,
+      "thoughtsTokenCount": 118,
+      "promptTokensDetails": [
+       {
+        "modality": "TEXT",
+        "tokenCount": 1387
+       }
+      ]
+     },
+     "modelVersion": "gemini-2.5-pro",
+     "responseId": "k3XbaPqWLo2Q0-kP4pfYsQE"
+    }
+   }
+  ]
+ },
+ "expect": {
+  "content": "",
+  "reasoning": "**Inspecting the file**\n\nThe test checks addition, so I should read calc.py.",
+  "finish_reason": "tool_calls",
+  "usage": {
+   "prompt_tokens": 1387,
+   "completion_tokens": 134,
+   "total_tokens": 1521,
+   "prompt_tokens_details": {
+    "cached_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 118
+   }
+  },
+  "replay": {
+   "provider": "gemini",
+   "model": "gemini-2.5-pro",
+   "parts": [
+    {
+     "text": "**Inspecting the file**\n\nThe test checks addition, so I should read calc.py.",
+     "thought": true
+    },
+    {
+     "functionCall": {
+      "name": "read",
+      "args": {
+       "path": "calc.py"
+      }
+     },
+     "thoughtSignature": "CiQB0e2Kb3w1v5kP9xR2sT7yU4aB6cD8eF0gH1iJ3kL5mN7oP9qR2sT4uV6wX8yZ0aB2cD4eF6gH8iJ0kL2mN4oP6qR8sT0uV2wX4yZ6"
+    }
+   ]
+  }
+ }
+}

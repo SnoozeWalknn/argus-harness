@@ -1,0 +1,414 @@
+{
+ "format": 1,
+ "source": "documented",
+ "flavor": "",
+ "quirks": [
+  "no_sampling"
+ ],
+ "description": "Responses API stream: reasoning summary deltas, encrypted reasoning in output_item.done, a function call, usage in response.completed",
+ "provider": "openai",
+ "model": "gpt-5",
+ "stream": true,
+ "canonical": {
+  "model": "gpt-5",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "max_tokens": 32000,
+  "temperature": 0.2,
+  "thinking": {
+   "effort": "medium"
+  }
+ },
+ "request": {
+  "method": "POST",
+  "path": "/responses",
+  "body": {
+   "model": "gpt-5",
+   "instructions": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call.",
+   "input": [
+    {
+     "role": "user",
+     "content": "test_add fails; fix calc.py"
+    }
+   ],
+   "max_output_tokens": 32000,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     },
+     "strict": false
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "reasoning": {
+    "effort": "medium",
+    "summary": "auto"
+   },
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "store": false,
+   "stream": true
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "text/event-stream"
+  },
+  "sse": [
+   {
+    "event": "response.created",
+    "data": {
+     "type": "response.created",
+     "sequence_number": 0,
+     "response": {
+      "id": "resp_68db1f49a6d881a0b5e4c3f2a1d0e9f8",
+      "object": "response",
+      "created_at": 1759190857,
+      "model": "gpt-5-2025-08-07",
+      "parallel_tool_calls": true,
+      "store": false,
+      "tool_choice": "auto",
+      "reasoning": {
+       "effort": "medium",
+       "summary": "detailed"
+      },
+      "status": "in_progress",
+      "output": [],
+      "usage": null
+     }
+    }
+   },
+   {
+    "event": "response.in_progress",
+    "data": {
+     "type": "response.in_progress",
+     "sequence_number": 1,
+     "response": {
+      "id": "resp_68db1f49a6d881a0b5e4c3f2a1d0e9f8",
+      "object": "response",
+      "created_at": 1759190857,
+      "model": "gpt-5-2025-08-07",
+      "parallel_tool_calls": true,
+      "store": false,
+      "tool_choice": "auto",
+      "reasoning": {
+       "effort": "medium",
+       "summary": "detailed"
+      },
+      "status": "in_progress",
+      "output": [],
+      "usage": null
+     }
+    }
+   },
+   {
+    "event": "response.output_item.added",
+    "data": {
+     "type": "response.output_item.added",
+     "sequence_number": 2,
+     "output_index": 0,
+     "item": {
+      "id": "rs_68db1f4a2c3481a0b2f9e1c7d5a60e3b0a4f8c2d9e7b1a3f",
+      "type": "reasoning",
+      "summary": []
+     }
+    }
+   },
+   {
+    "event": "response.reasoning_summary_part.added",
+    "data": {
+     "type": "response.reasoning_summary_part.added",
+     "sequence_number": 3,
+     "item_id": "rs_68db1f4a2c3481a0b2f9e1c7d5a60e3b0a4f8c2d9e7b1a3f",
+     "output_index": 0,
+     "summary_index": 0,
+     "part": {
+      "type": "summary_text",
+      "text": ""
+     }
+    }
+   },
+   {
+    "event": "response.reasoning_summary_text.delta",
+    "data": {
+     "type": "response.reasoning_summary_text.delta",
+     "sequence_number": 4,
+     "item_id": "rs_68db1f4a2c3481a0b2f9e1c7d5a60e3b0a4f8c2d9e7b1a3f",
+     "output_index": 0,
+     "summary_index": 0,
+     "delta": "**Reading calc.py**\n\n",
+     "obfuscation": "k2"
+    }
+   },
+   {
+    "event": "response.reasoning_summary_text.delta",
+    "data": {
+     "type": "response.reasoning_summary_text.delta",
+     "sequence_number": 5,
+     "item_id": "rs_68db1f4a2c3481a0b2f9e1c7d5a60e3b0a4f8c2d9e7b1a3f",
+     "output_index": 0,
+     "summary_index": 0,
+     "delta": "The failing test is about addition; I'll read calc.py first.",
+     "obfuscation": "x9"
+    }
+   },
+   {
+    "event": "response.reasoning_summary_text.done",
+    "data": {
+     "type": "response.reasoning_summary_text.done",
+     "sequence_number": 6,
+     "item_id": "rs_68db1f4a2c3481a0b2f9e1c7d5a60e3b0a4f8c2d9e7b1a3f",
+     "output_index": 0,
+     "summary_index": 0,
+     "text": "**Reading calc.py**\n\nThe failing test is about addition; I'll read calc.py first."
+    }
+   },
+   {
+    "event": "response.reasoning_summary_part.done",
+    "data": {
+     "type": "response.reasoning_summary_part.done",
+     "sequence_number": 7,
+     "item_id": "rs_68db1f4a2c3481a0b2f9e1c7d5a60e3b0a4f8c2d9e7b1a3f",
+     "output_index": 0,
+     "summary_index": 0,
+     "part": {
+      "type": "summary_text",
+      "text": "**Reading calc.py**\n\nThe failing test is about addition; I'll read calc.py first."
+     }
+    }
+   },
+   {
+    "event": "response.output_item.done",
+    "data": {
+     "type": "response.output_item.done",
+     "sequence_number": 8,
+     "output_index": 0,
+     "item": {
+      "id": "rs_68db1f4a2c3481a0b2f9e1c7d5a60e3b0a4f8c2d9e7b1a3f",
+      "type": "reasoning",
+      "summary": [
+       {
+        "type": "summary_text",
+        "text": "**Reading calc.py**\n\nThe failing test is about addition; I'll read calc.py first."
+       }
+      ],
+      "encrypted_content": "gAAAAABo2x9Kp4QeZ1vXcN0mR7tL8sYbH3wF6jD2kU5aE9oG1iP-vT4nM8qW0zX7cB3yV6uS2rA5dF9gH1jK4lZ8xC0vB7nM2qW5eR8tY1uI4oP7aS0dF3gH6jK9lZ2xC5vB8nM1qW4eR7tY0uI3oP6aS9dF2gH5jK8lZ1xC4vB7nM0qW3eR6tY9uI2oP5aS8dF1gH4jK7lZ0xC3vB6nM9qW2eR5tY8uI1oP4aS7dF0g=="
+     }
+    }
+   },
+   {
+    "event": "response.output_item.added",
+    "data": {
+     "type": "response.output_item.added",
+     "sequence_number": 9,
+     "output_index": 1,
+     "item": {
+      "id": "fc_68db1f4c5d6e81a0a7b3c9e2f1d40a5b6c7d8e9f0a1b2c3d",
+      "type": "function_call",
+      "status": "in_progress",
+      "arguments": "",
+      "call_id": "call_mX7qT2vN9pL4sK8wR3yZ6bJ1",
+      "name": "read"
+     }
+    }
+   },
+   {
+    "event": "response.function_call_arguments.delta",
+    "data": {
+     "type": "response.function_call_arguments.delta",
+     "sequence_number": 10,
+     "item_id": "fc_68db1f4c5d6e81a0a7b3c9e2f1d40a5b6c7d8e9f0a1b2c3d",
+     "output_index": 1,
+     "delta": "{\"path\":",
+     "obfuscation": "a1"
+    }
+   },
+   {
+    "event": "response.function_call_arguments.delta",
+    "data": {
+     "type": "response.function_call_arguments.delta",
+     "sequence_number": 11,
+     "item_id": "fc_68db1f4c5d6e81a0a7b3c9e2f1d40a5b6c7d8e9f0a1b2c3d",
+     "output_index": 1,
+     "delta": "\"calc.py\"}",
+     "obfuscation": "b2"
+    }
+   },
+   {
+    "event": "response.function_call_arguments.done",
+    "data": {
+     "type": "response.function_call_arguments.done",
+     "sequence_number": 12,
+     "item_id": "fc_68db1f4c5d6e81a0a7b3c9e2f1d40a5b6c7d8e9f0a1b2c3d",
+     "output_index": 1,
+     "arguments": "{\"path\":\"calc.py\"}"
+    }
+   },
+   {
+    "event": "response.output_item.done",
+    "data": {
+     "type": "response.output_item.done",
+     "sequence_number": 13,
+     "output_index": 1,
+     "item": {
+      "id": "fc_68db1f4c5d6e81a0a7b3c9e2f1d40a5b6c7d8e9f0a1b2c3d",
+      "type": "function_call",
+      "status": "completed",
+      "arguments": "{\"path\":\"calc.py\"}",
+      "call_id": "call_mX7qT2vN9pL4sK8wR3yZ6bJ1",
+      "name": "read"
+     }
+    }
+   },
+   {
+    "event": "response.completed",
+    "data": {
+     "type": "response.completed",
+     "sequence_number": 14,
+     "response": {
+      "id": "resp_68db1f49a6d881a0b5e4c3f2a1d0e9f8",
+      "object": "response",
+      "created_at": 1759190857,
+      "model": "gpt-5-2025-08-07",
+      "parallel_tool_calls": true,
+      "store": false,
+      "tool_choice": "auto",
+      "reasoning": {
+       "effort": "medium",
+       "summary": "detailed"
+      },
+      "status": "completed",
+      "incomplete_details": null,
+      "output": [
+       {
+        "id": "rs_68db1f4a2c3481a0b2f9e1c7d5a60e3b0a4f8c2d9e7b1a3f",
+        "type": "reasoning",
+        "summary": [
+         {
+          "type": "summary_text",
+          "text": "**Reading calc.py**\n\nThe failing test is about addition; I'll read calc.py first."
+         }
+        ],
+        "encrypted_content": "gAAAAABo2x9Kp4QeZ1vXcN0mR7tL8sYbH3wF6jD2kU5aE9oG1iP-vT4nM8qW0zX7cB3yV6uS2rA5dF9gH1jK4lZ8xC0vB7nM2qW5eR8tY1uI4oP7aS0dF3gH6jK9lZ2xC5vB8nM1qW4eR7tY0uI3oP6aS9dF2gH5jK8lZ1xC4vB7nM0qW3eR6tY9uI2oP5aS8dF1gH4jK7lZ0xC3vB6nM9qW2eR5tY8uI1oP4aS7dF0g=="
+       },
+       {
+        "id": "fc_68db1f4c5d6e81a0a7b3c9e2f1d40a5b6c7d8e9f0a1b2c3d",
+        "type": "function_call",
+        "status": "completed",
+        "arguments": "{\"path\":\"calc.py\"}",
+        "call_id": "call_mX7qT2vN9pL4sK8wR3yZ6bJ1",
+        "name": "read"
+       }
+      ],
+      "usage": {
+       "input_tokens": 1402,
+       "input_tokens_details": {
+        "cached_tokens": 0
+       },
+       "output_tokens": 164,
+       "output_tokens_details": {
+        "reasoning_tokens": 128
+       },
+       "total_tokens": 1566
+      }
+     }
+    }
+   }
+  ]
+ },
+ "expect": {
+  "content": "",
+  "reasoning": "**Reading calc.py**\n\nThe failing test is about addition; I'll read calc.py first.",
+  "tool_calls": [
+   [
+    "call_mX7qT2vN9pL4sK8wR3yZ6bJ1",
+    "read",
+    "{\"path\":\"calc.py\"}"
+   ]
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+   "prompt_tokens": 1402,
+   "completion_tokens": 164,
+   "total_tokens": 1566,
+   "prompt_tokens_details": {
+    "cached_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 128
+   }
+  },
+  "replay": {
+   "provider": "openai",
+   "model": "gpt-5-2025-08-07",
+   "items": [
+    {
+     "id": "rs_68db1f4a2c3481a0b2f9e1c7d5a60e3b0a4f8c2d9e7b1a3f",
+     "type": "reasoning",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Reading calc.py**\n\nThe failing test is about addition; I'll read calc.py first."
+      }
+     ],
+     "encrypted_content": "gAAAAABo2x9Kp4QeZ1vXcN0mR7tL8sYbH3wF6jD2kU5aE9oG1iP-vT4nM8qW0zX7cB3yV6uS2rA5dF9gH1jK4lZ8xC0vB7nM2qW5eR8tY1uI4oP7aS0dF3gH6jK9lZ2xC5vB8nM1qW4eR7tY0uI3oP6aS9dF2gH5jK8lZ1xC4vB7nM0qW3eR6tY9uI2oP5aS8dF1gH4jK7lZ0xC3vB6nM9qW2eR5tY8uI1oP4aS7dF0g=="
+    },
+    {
+     "id": "fc_68db1f4c5d6e81a0a7b3c9e2f1d40a5b6c7d8e9f0a1b2c3d",
+     "type": "function_call",
+     "status": "completed",
+     "arguments": "{\"path\":\"calc.py\"}",
+     "call_id": "call_mX7qT2vN9pL4sK8wR3yZ6bJ1",
+     "name": "read"
+    }
+   ]
+  }
+ }
+}

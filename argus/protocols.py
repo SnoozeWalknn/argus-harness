@@ -161,7 +161,9 @@ class NativeProtocol(Protocol):
             args, err = decode_args(raw.arguments)
             call = ToolCall(raw.id or f"call_{turn}_{i}", raw.name, args or {}, raw.arguments, err)
             p.calls.append(check_call(self.tools, call))
-        if not p.calls and TOOL_MARKUP.search(c.content):
+        if not p.calls and c.malformed:
+            p.problems.append(c.malformed + "; call tools with the function-calling format")
+        elif not p.calls and TOOL_MARKUP.search(c.content):
             salvaged = salvage_calls(c.content, turn)
             if salvaged:
                 p.calls = [check_call(self.tools, s) for s in salvaged]

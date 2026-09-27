@@ -1,0 +1,153 @@
+{
+ "format": 1,
+ "source": "documented",
+ "flavor": "",
+ "quirks": [],
+ "description": "Reasoning used the whole max_output_tokens budget: response.incomplete with reason max_output_tokens",
+ "provider": "openai",
+ "model": "gpt-5",
+ "stream": true,
+ "canonical": {
+  "model": "gpt-5",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "max_tokens": 256
+ },
+ "request": {
+  "method": "POST",
+  "path": "/responses",
+  "body": {
+   "model": "gpt-5",
+   "instructions": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call.",
+   "input": [
+    {
+     "role": "user",
+     "content": "test_add fails; fix calc.py"
+    }
+   ],
+   "max_output_tokens": 256,
+   "reasoning": {
+    "summary": "auto"
+   },
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "store": false,
+   "stream": true
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "text/event-stream"
+  },
+  "sse": [
+   {
+    "event": "response.created",
+    "data": {
+     "type": "response.created",
+     "sequence_number": 0,
+     "response": {
+      "id": "resp_inc",
+      "object": "response",
+      "created_at": 1759190857,
+      "model": "gpt-5-2025-08-07",
+      "parallel_tool_calls": true,
+      "store": false,
+      "tool_choice": "auto",
+      "reasoning": {
+       "effort": "medium",
+       "summary": "detailed"
+      },
+      "status": "in_progress",
+      "output": [],
+      "usage": null
+     }
+    }
+   },
+   {
+    "event": "response.output_item.added",
+    "data": {
+     "type": "response.output_item.added",
+     "sequence_number": 1,
+     "output_index": 0,
+     "item": {
+      "id": "rs_inc",
+      "type": "reasoning",
+      "summary": []
+     }
+    }
+   },
+   {
+    "event": "response.output_item.done",
+    "data": {
+     "type": "response.output_item.done",
+     "sequence_number": 2,
+     "output_index": 0,
+     "item": {
+      "id": "rs_inc",
+      "type": "reasoning",
+      "summary": [],
+      "encrypted_content": "gAAAA-inc"
+     }
+    }
+   },
+   {
+    "event": "response.incomplete",
+    "data": {
+     "type": "response.incomplete",
+     "sequence_number": 3,
+     "response": {
+      "id": "resp_inc",
+      "object": "response",
+      "created_at": 1759190857,
+      "model": "gpt-5-2025-08-07",
+      "parallel_tool_calls": true,
+      "store": false,
+      "tool_choice": "auto",
+      "reasoning": {
+       "effort": "medium",
+       "summary": "detailed"
+      },
+      "status": "incomplete",
+      "incomplete_details": {
+       "reason": "max_output_tokens"
+      },
+      "output": [
+       {
+        "id": "rs_inc",
+        "type": "reasoning",
+        "summary": [],
+        "encrypted_content": "gAAAA-inc"
+       }
+      ],
+      "usage": {
+       "input_tokens": 1402,
+       "input_tokens_details": {
+        "cached_tokens": 0
+       },
+       "output_tokens": 256,
+       "output_tokens_details": {
+        "reasoning_tokens": 256
+       },
+       "total_tokens": 1658
+      }
+     }
+    }
+   }
+  ]
+ },
+ "expect": {
+  "content": "",
+  "tool_calls": [],
+  "finish_reason": "length"
+ }
+}

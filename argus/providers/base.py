@@ -94,6 +94,7 @@ class Completion:
     token_chunks: bool = True  # one streamed chunk is one token (llama.cpp and friends)
     stop_raw: str | None = None  # the provider's own stop reason
     refusal: str | None = None  # refusal text or category, when the model declined
+    malformed: str | None = None  # the provider reports an unparseable tool call
     replay: dict[str, Any] | None = None  # provider state to send back with this message
     notes: list[str] = field(default_factory=list)  # adapter decisions worth logging
     replay_rejected: bool = False  # the API refused replayed state; stop sending it
@@ -385,6 +386,7 @@ class Provider:
                 "context length",
                 "context_length_exceeded",
                 "maximum context length",
+                "context window",
                 "prompt is too long",
                 "input token count",
                 "too many tokens",
@@ -405,7 +407,7 @@ class Provider:
         if isinstance(body, dict) and isinstance(body.get("error"), dict):
             err = body["error"]
             msg = err.get("message", body)
-            kind = str(err.get("type") or err.get("status") or err.get("code") or "")
+            kind = f"{err.get('type') or err.get('status') or ''} {err.get('code') or ''}"
         elif isinstance(body, dict) and "message" in body:
             msg = body["message"]
         text = f"{kind} {msg}"

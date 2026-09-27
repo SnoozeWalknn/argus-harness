@@ -38,7 +38,7 @@ def run_fixture(fx: dict):
     server = MockServer(
         Script([{"replay": fx["response"]}]),
         model=fx.get("model", "m"),
-        enforce_thinking_binding=False,  # real signatures are opaque to the mock
+        verify_signatures=False,  # real signatures and encrypted reasoning are opaque
     ).start()
     try:
         kind = fx["provider"]
@@ -111,4 +111,4 @@ def test_fixture(path: Path):
 
 def test_fixtures_exist_for_every_provider():
     kinds = {json.loads(p.read_text())["provider"] for p in fixture_files()}
-    assert {"openai_compat", "openrouter", "anthropic"} <= kinds
+    assert {"openai_compat", "openrouter", "anthropic", "openai", "gemini"} <= kinds

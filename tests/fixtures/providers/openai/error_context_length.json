@@ -1,0 +1,64 @@
+{
+ "format": 1,
+ "source": "documented",
+ "flavor": "",
+ "quirks": [],
+ "description": "400 context_length_exceeded",
+ "provider": "openai",
+ "model": "gpt-5",
+ "stream": false,
+ "canonical": {
+  "model": "gpt-5",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "max_tokens": 1000,
+  "thinking": {
+   "enabled": false
+  }
+ },
+ "request": {
+  "method": "POST",
+  "path": "/responses",
+  "body": {
+   "model": "gpt-5",
+   "instructions": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call.",
+   "input": [
+    {
+     "role": "user",
+     "content": "test_add fails; fix calc.py"
+    }
+   ],
+   "max_output_tokens": 1000,
+   "reasoning": {
+    "effort": "minimal"
+   },
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "store": false
+  }
+ },
+ "response": {
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "json": {
+   "error": {
+    "message": "Your input exceeds the context window of this model. Please adjust your input and try again.",
+    "type": "invalid_request_error",
+    "param": "input",
+    "code": "context_length_exceeded"
+   }
+  }
+ },
+ "expect_error": "ContextOverflow"
+}

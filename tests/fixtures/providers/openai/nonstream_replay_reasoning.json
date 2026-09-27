@@ -1,0 +1,258 @@
+{
+ "format": 1,
+ "source": "documented",
+ "flavor": "",
+ "quirks": [],
+ "description": "Not streamed: the previous turn's reasoning item (with encrypted_content) is replayed to the same model; final message; cached input",
+ "provider": "openai",
+ "model": "gpt-5",
+ "stream": false,
+ "canonical": {
+  "model": "gpt-5",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+     {
+      "id": "call_mX7qT2vN9pL4sK8wR3yZ6bJ1",
+      "type": "function",
+      "function": {
+       "name": "read",
+       "arguments": "{\"path\":\"calc.py\"}"
+      }
+     }
+    ],
+    "replay": {
+     "provider": "openai",
+     "model": "gpt-5",
+     "items": [
+      {
+       "id": "rs_68db1f4a2c3481a0b2f9e1c7d5a60e3b0a4f8c2d9e7b1a3f",
+       "type": "reasoning",
+       "summary": [
+        {
+         "type": "summary_text",
+         "text": "**Reading calc.py**\n\nThe failing test is about addition; I'll read calc.py first."
+        }
+       ],
+       "encrypted_content": "gAAAAABo2x9Kp4QeZ1vXcN0mR7tL8sYbH3wF6jD2kU5aE9oG1iP-vT4nM8qW0zX7cB3yV6uS2rA5dF9gH1jK4lZ8xC0vB7nM2qW5eR8tY1uI4oP7aS0dF3gH6jK9lZ2xC5vB8nM1qW4eR7tY0uI3oP6aS9dF2gH5jK8lZ1xC4vB7nM0qW3eR6tY9uI2oP5aS8dF1gH4jK7lZ0xC3vB6nM9qW2eR5tY8uI1oP4aS7dF0g=="
+      },
+      {
+       "id": "fc_68db1f4c5d6e81a0a7b3c9e2f1d40a5b6c7d8e9f0a1b2c3d",
+       "type": "function_call",
+       "status": "completed",
+       "arguments": "{\"path\":\"calc.py\"}",
+       "call_id": "call_mX7qT2vN9pL4sK8wR3yZ6bJ1",
+       "name": "read"
+      }
+     ]
+    }
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "call_mX7qT2vN9pL4sK8wR3yZ6bJ1",
+    "content": "1\tdef add(a, b):\n2\t    return a - b"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "max_tokens": 32000,
+  "thinking": {
+   "effort": "medium"
+  }
+ },
+ "request": {
+  "method": "POST",
+  "path": "/responses",
+  "body": {
+   "model": "gpt-5",
+   "instructions": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call.",
+   "input": [
+    {
+     "role": "user",
+     "content": "test_add fails; fix calc.py"
+    },
+    {
+     "id": "rs_68db1f4a2c3481a0b2f9e1c7d5a60e3b0a4f8c2d9e7b1a3f",
+     "type": "reasoning",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Reading calc.py**\n\nThe failing test is about addition; I'll read calc.py first."
+      }
+     ],
+     "encrypted_content": "gAAAAABo2x9Kp4QeZ1vXcN0mR7tL8sYbH3wF6jD2kU5aE9oG1iP-vT4nM8qW0zX7cB3yV6uS2rA5dF9gH1jK4lZ8xC0vB7nM2qW5eR8tY1uI4oP7aS0dF3gH6jK9lZ2xC5vB8nM1qW4eR7tY0uI3oP6aS9dF2gH5jK8lZ1xC4vB7nM0qW3eR6tY9uI2oP5aS8dF1gH4jK7lZ0xC3vB6nM9qW2eR5tY8uI1oP4aS7dF0g=="
+    },
+    {
+     "type": "function_call",
+     "arguments": "{\"path\":\"calc.py\"}",
+     "call_id": "call_mX7qT2vN9pL4sK8wR3yZ6bJ1",
+     "name": "read"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_mX7qT2vN9pL4sK8wR3yZ6bJ1",
+     "output": "1\tdef add(a, b):\n2\t    return a - b"
+    }
+   ],
+   "max_output_tokens": 32000,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     },
+     "strict": false
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "reasoning": {
+    "effort": "medium",
+    "summary": "auto"
+   },
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "store": false
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "json": {
+   "id": "resp_68db1f52",
+   "object": "response",
+   "created_at": 1759190857,
+   "model": "gpt-5-2025-08-07",
+   "parallel_tool_calls": true,
+   "store": false,
+   "tool_choice": "auto",
+   "reasoning": {
+    "effort": "medium",
+    "summary": "detailed"
+   },
+   "status": "completed",
+   "incomplete_details": null,
+   "output": [
+    {
+     "id": "rs_68db1f53",
+     "type": "reasoning",
+     "summary": [],
+     "encrypted_content": "==g0Fd7Sa4Po1Iu8Yt5Re2Wq9Mn6Bv3Cx0Zl7Kj4Hg1Fd8Sa5Po2Iu9Yt6Re3Wq0Mn7Bv4Cx1Zl8Kj5Hg2Fd9Sa6Po3Iu0Yt7Re4Wq1Mn8Bv5Cx2Zl9Kj6Hg3Fd0Sa7Po4Iu1Yt8Re5Wq2Mn7Bv0Cx8Zl4Kj1Hg9Fd5Ar2Su6Vy3Bc7Xz0Wq8Mn4Tv-Pi1Go9Ea5Uk2Dj6Fw3HbYs8Lt7Rm0NcXv1ZeQ4pK9x2oBAAAAAg"
+    },
+    {
+     "id": "msg_68db1f55e0f081a0",
+     "type": "message",
+     "status": "completed",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "add() subtracts instead of adding; change `return a - b` to `return a + b`."
+      }
+     ]
+    }
+   ],
+   "usage": {
+    "input_tokens": 1655,
+    "input_tokens_details": {
+     "cached_tokens": 1408
+    },
+    "output_tokens": 96,
+    "output_tokens_details": {
+     "reasoning_tokens": 64
+    },
+    "total_tokens": 1751
+   }
+  }
+ },
+ "expect": {
+  "content": "add() subtracts instead of adding; change `return a - b` to `return a + b`.",
+  "reasoning": "",
+  "tool_calls": [],
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 1655,
+   "completion_tokens": 96,
+   "total_tokens": 1751,
+   "prompt_tokens_details": {
+    "cached_tokens": 1408
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 64
+   }
+  },
+  "replay": {
+   "provider": "openai",
+   "model": "gpt-5-2025-08-07",
+   "items": [
+    {
+     "id": "rs_68db1f53",
+     "type": "reasoning",
+     "summary": [],
+     "encrypted_content": "==g0Fd7Sa4Po1Iu8Yt5Re2Wq9Mn6Bv3Cx0Zl7Kj4Hg1Fd8Sa5Po2Iu9Yt6Re3Wq0Mn7Bv4Cx1Zl8Kj5Hg2Fd9Sa6Po3Iu0Yt7Re4Wq1Mn8Bv5Cx2Zl9Kj6Hg3Fd0Sa7Po4Iu1Yt8Re5Wq2Mn7Bv0Cx8Zl4Kj1Hg9Fd5Ar2Su6Vy3Bc7Xz0Wq8Mn4Tv-Pi1Go9Ea5Uk2Dj6Fw3HbYs8Lt7Rm0NcXv1ZeQ4pK9x2oBAAAAAg"
+    },
+    {
+     "id": "msg_68db1f55e0f081a0",
+     "type": "message",
+     "status": "completed",
+     "role": "assistant",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "add() subtracts instead of adding; change `return a - b` to `return a + b`."
+      }
+     ]
+    }
+   ]
+  }
+ }
+}
