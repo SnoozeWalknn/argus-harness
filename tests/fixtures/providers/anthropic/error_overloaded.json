@@ -1,0 +1,61 @@
+{
+ "format": 1,
+ "source": "documented",
+ "provider": "anthropic",
+ "flavor": "",
+ "quirks": [],
+ "model": "claude-opus-5",
+ "description": "529 overloaded_error (retryable; fixtures run with retries=0)",
+ "stream": false,
+ "canonical": {
+  "model": "claude-opus-5",
+  "messages": [
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "max_tokens": 1000,
+  "cache": false,
+  "thinking": {
+   "enabled": false
+  }
+ },
+ "request": {
+  "method": "POST",
+  "path": "/messages",
+  "body": {
+   "model": "claude-opus-5",
+   "max_tokens": 1000,
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "test_add fails; fix calc.py"
+      }
+     ]
+    }
+   ],
+   "thinking": {
+    "type": "disabled"
+   }
+  }
+ },
+ "response": {
+  "status": 529,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "json": {
+   "type": "error",
+   "error": {
+    "type": "overloaded_error",
+    "message": "Overloaded"
+   },
+   "request_id": "req_011CSHoEeqs5C35K2UUqR7Fz"
+  }
+ },
+ "expect_error": "LLMError"
+}

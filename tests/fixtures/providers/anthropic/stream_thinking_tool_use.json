@@ -1,0 +1,352 @@
+{
+ "format": 1,
+ "source": "documented",
+ "provider": "anthropic",
+ "flavor": "",
+ "quirks": [],
+ "model": "claude-opus-5",
+ "description": "Streamed turn: summarized adaptive thinking with a signature, text, and a tool_use whose input streams as JSON fragments",
+ "stream": true,
+ "canonical": {
+  "model": "claude-opus-5",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "max_tokens": 32000,
+  "thinking": {
+   "effort": "high"
+  }
+ },
+ "request": {
+  "method": "POST",
+  "path": "/messages",
+  "body": {
+   "model": "claude-opus-5",
+   "max_tokens": 32000,
+   "system": [
+    {
+     "type": "text",
+     "text": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call.",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "test_add fails; fix calc.py",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "tool_choice": {
+    "type": "auto"
+   },
+   "thinking": {
+    "type": "adaptive",
+    "display": "summarized"
+   },
+   "output_config": {
+    "effort": "high"
+   },
+   "stream": true
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "text/event-stream"
+  },
+  "sse": [
+   {
+    "event": "message_start",
+    "data": {
+     "type": "message_start",
+     "message": {
+      "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-opus-5",
+      "content": [],
+      "stop_reason": null,
+      "stop_sequence": null,
+      "usage": {
+       "input_tokens": 9,
+       "cache_creation_input_tokens": 1840,
+       "cache_read_input_tokens": 0,
+       "output_tokens": 1,
+       "service_tier": "standard"
+      }
+     }
+    }
+   },
+   {
+    "event": "ping",
+    "data": {
+     "type": "ping"
+    }
+   },
+   {
+    "event": "content_block_start",
+    "data": {
+     "type": "content_block_start",
+     "index": 0,
+     "content_block": {
+      "type": "thinking",
+      "thinking": "",
+      "signature": ""
+     }
+    }
+   },
+   {
+    "event": "content_block_delta",
+    "data": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "thinking_delta",
+      "thinking": "The test expects addition, "
+     }
+    }
+   },
+   {
+    "event": "content_block_delta",
+    "data": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "thinking_delta",
+      "thinking": "so read calc.py first."
+     }
+    }
+   },
+   {
+    "event": "content_block_delta",
+    "data": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "signature_delta",
+      "signature": "EqQBCkgIBxABGAIiQL4kN0xtGo7rC2v9F1c0mJ8q3Xw6ZyRZcS0p2Qh5nYt8Vj1+K4dUaE7oPsLbWfM9gHq2Rr3xT6nC0yI5vJkS"
+     }
+    }
+   },
+   {
+    "event": "content_block_stop",
+    "data": {
+     "type": "content_block_stop",
+     "index": 0
+    }
+   },
+   {
+    "event": "content_block_start",
+    "data": {
+     "type": "content_block_start",
+     "index": 1,
+     "content_block": {
+      "type": "text",
+      "text": ""
+     }
+    }
+   },
+   {
+    "event": "content_block_delta",
+    "data": {
+     "type": "content_block_delta",
+     "index": 1,
+     "delta": {
+      "type": "text_delta",
+      "text": "Let me look at "
+     }
+    }
+   },
+   {
+    "event": "content_block_delta",
+    "data": {
+     "type": "content_block_delta",
+     "index": 1,
+     "delta": {
+      "type": "text_delta",
+      "text": "calc.py."
+     }
+    }
+   },
+   {
+    "event": "content_block_stop",
+    "data": {
+     "type": "content_block_stop",
+     "index": 1
+    }
+   },
+   {
+    "event": "content_block_start",
+    "data": {
+     "type": "content_block_start",
+     "index": 2,
+     "content_block": {
+      "type": "tool_use",
+      "id": "toolu_01A09q90qw90lq917835lq9",
+      "name": "read",
+      "input": {}
+     }
+    }
+   },
+   {
+    "event": "content_block_delta",
+    "data": {
+     "type": "content_block_delta",
+     "index": 2,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": ""
+     }
+    }
+   },
+   {
+    "event": "content_block_delta",
+    "data": {
+     "type": "content_block_delta",
+     "index": 2,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "{\"path\": \"ca"
+     }
+    }
+   },
+   {
+    "event": "content_block_delta",
+    "data": {
+     "type": "content_block_delta",
+     "index": 2,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "lc.py\"}"
+     }
+    }
+   },
+   {
+    "event": "content_block_stop",
+    "data": {
+     "type": "content_block_stop",
+     "index": 2
+    }
+   },
+   {
+    "event": "message_delta",
+    "data": {
+     "type": "message_delta",
+     "delta": {
+      "stop_reason": "tool_use",
+      "stop_sequence": null
+     },
+     "usage": {
+      "output_tokens": 89
+     }
+    }
+   },
+   {
+    "event": "message_stop",
+    "data": {
+     "type": "message_stop"
+    }
+   }
+  ]
+ },
+ "expect": {
+  "content": "Let me look at calc.py.",
+  "reasoning": "The test expects addition, so read calc.py first.",
+  "tool_calls": [
+   [
+    "toolu_01A09q90qw90lq917835lq9",
+    "read",
+    "{\"path\": \"calc.py\"}"
+   ]
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+   "prompt_tokens": 1849,
+   "completion_tokens": 89,
+   "total_tokens": 1938,
+   "prompt_tokens_details": {
+    "cached_tokens": 0
+   },
+   "cache_write_tokens": 1840
+  },
+  "replay": {
+   "provider": "anthropic",
+   "model": "claude-opus-5",
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "The test expects addition, so read calc.py first.",
+     "signature": "EqQBCkgIBxABGAIiQL4kN0xtGo7rC2v9F1c0mJ8q3Xw6ZyRZcS0p2Qh5nYt8Vj1+K4dUaE7oPsLbWfM9gHq2Rr3xT6nC0yI5vJkS"
+    },
+    {
+     "type": "text",
+     "text": "Let me look at calc.py."
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01A09q90qw90lq917835lq9",
+     "name": "read",
+     "input": {
+      "path": "calc.py"
+     }
+    }
+   ]
+  }
+ }
+}

@@ -10,6 +10,7 @@ Tags (``failures.tag``):
 ``malformed_call``  a call or reply that could not be parsed or validated
 ``token_cap``       a token limit cut the model off: max_tokens, the reasoning budget,
                     the context window or the run's token budget
+``refusal``         the provider declined the request (safety stop), with its reason
 """
 
 from __future__ import annotations

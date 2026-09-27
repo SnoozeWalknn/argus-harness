@@ -1,0 +1,191 @@
+{
+ "format": 1,
+ "source": "documented",
+ "provider": "anthropic",
+ "flavor": "",
+ "quirks": [],
+ "model": "claude-opus-5",
+ "description": "Streamed final answer where the thinking block carries only a signature (display omitted); caching off",
+ "stream": true,
+ "canonical": {
+  "model": "claude-opus-5",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "max_tokens": 32000,
+  "cache": false
+ },
+ "request": {
+  "method": "POST",
+  "path": "/messages",
+  "body": {
+   "model": "claude-opus-5",
+   "max_tokens": 32000,
+   "system": [
+    {
+     "type": "text",
+     "text": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "test_add fails; fix calc.py"
+      }
+     ]
+    }
+   ],
+   "thinking": {
+    "type": "adaptive",
+    "display": "summarized"
+   },
+   "stream": true
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "text/event-stream"
+  },
+  "sse": [
+   {
+    "event": "message_start",
+    "data": {
+     "type": "message_start",
+     "message": {
+      "id": "msg_01C",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-opus-5",
+      "content": [],
+      "stop_reason": null,
+      "stop_sequence": null,
+      "usage": {
+       "input_tokens": 12,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 2100,
+       "output_tokens": 1
+      }
+     }
+    }
+   },
+   {
+    "event": "content_block_start",
+    "data": {
+     "type": "content_block_start",
+     "index": 0,
+     "content_block": {
+      "type": "thinking",
+      "thinking": "",
+      "signature": ""
+     }
+    }
+   },
+   {
+    "event": "content_block_delta",
+    "data": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "signature_delta",
+      "signature": "EqQBCkgIBxABGAIiQL4kN0xtGo7rC2v9F1c0mJ8q3Xw6ZyRZcS0p2Qh5nYt8Vj1+K4dUaE7oPsLbWfM9gHq2Rr3xT6nC0yI5vJkS"
+     }
+    }
+   },
+   {
+    "event": "content_block_stop",
+    "data": {
+     "type": "content_block_stop",
+     "index": 0
+    }
+   },
+   {
+    "event": "content_block_start",
+    "data": {
+     "type": "content_block_start",
+     "index": 1,
+     "content_block": {
+      "type": "text",
+      "text": ""
+     }
+    }
+   },
+   {
+    "event": "content_block_delta",
+    "data": {
+     "type": "content_block_delta",
+     "index": 1,
+     "delta": {
+      "type": "text_delta",
+      "text": "Fixed add(): it returned a - b; now a + b. Tests pass."
+     }
+    }
+   },
+   {
+    "event": "content_block_stop",
+    "data": {
+     "type": "content_block_stop",
+     "index": 1
+    }
+   },
+   {
+    "event": "message_delta",
+    "data": {
+     "type": "message_delta",
+     "delta": {
+      "stop_reason": "end_turn",
+      "stop_sequence": null
+     },
+     "usage": {
+      "output_tokens": 31
+     }
+    }
+   },
+   {
+    "event": "message_stop",
+    "data": {
+     "type": "message_stop"
+    }
+   }
+  ]
+ },
+ "expect": {
+  "content": "Fixed add(): it returned a - b; now a + b. Tests pass.",
+  "reasoning": "",
+  "tool_calls": [],
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 2112,
+   "completion_tokens": 31,
+   "total_tokens": 2143,
+   "prompt_tokens_details": {
+    "cached_tokens": 2100
+   }
+  },
+  "replay": {
+   "provider": "anthropic",
+   "model": "claude-opus-5",
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "",
+     "signature": "EqQBCkgIBxABGAIiQL4kN0xtGo7rC2v9F1c0mJ8q3Xw6ZyRZcS0p2Qh5nYt8Vj1+K4dUaE7oPsLbWfM9gHq2Rr3xT6nC0yI5vJkS"
+    },
+    {
+     "type": "text",
+     "text": "Fixed add(): it returned a - b; now a + b. Tests pass."
+    }
+   ]
+  }
+ }
+}

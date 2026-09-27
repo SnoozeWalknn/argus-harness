@@ -57,6 +57,7 @@ __all__ = [
     "parse_spec",
     "resolve_kind",
     "root_url",
+    "strip_replay",
 ]
 
 FLAVORS = ("llama_server", "ollama", "vllm", "lmstudio", "openrouter")
@@ -122,6 +123,14 @@ def adapter_class(kind: str) -> type[Provider]:
     key = "openai_compat" if kind in FLAVORS else kind
     module, name = ADAPTERS[key]
     return getattr(importlib.import_module(module), name)
+
+
+def strip_replay(replay: dict[str, Any]) -> dict[str, Any] | None:
+    """Replay state minus reasoning (see :meth:`Provider.strip_replay`)."""
+    kind = replay.get("provider", "")
+    if kind not in ADAPTERS:
+        return None
+    return adapter_class(kind).strip_replay(replay)
 
 
 def make_provider(

@@ -113,12 +113,15 @@ class MockServer:
         strict: bool = True,
         flavor: str = "llama_server",
         num_ctx: int | None = None,
+        enforce_thinking_binding: bool = True,
     ):
         if flavor not in FLAVORS:
             raise ValueError(f"unknown mock flavor {flavor!r}; choose from {', '.join(FLAVORS)}")
         self.script = script if isinstance(script, Script) else Script(script or [])
         self.flavor = flavor  # which OpenAI-compatible server to imitate
         self.num_ctx = num_ctx  # ollama: the model's num_ctx parameter, if set
+        # anthropic: reject replayed thinking blocks whose conversation prefix changed
+        self.enforce_thinking_binding = enforce_thinking_binding
         self.n_ctx = n_ctx
         self.host = host
         self.model = model
@@ -180,7 +183,7 @@ class MockServer:
     def prompt_tokens(self, req: dict[str, Any]) -> list[int]:
         return token_ids(render_chatml(req))
 
-    def build(self, req: dict[str, Any], step: Step) -> _Gen:
+    def build(self, req: dict[str, Any], step: Step, id_prefix: str = "call_") -> _Gen:
         g = _Gen()
         proto = request_protocol(req)
         g.reasoning = list(_repeat(step.get("reasoning", ""), int(step.get("reasoning_repeat", 1))))
@@ -189,7 +192,7 @@ class MockServer:
             args = tc.get("arguments", {})
             calls.append(
                 {
-                    "id": tc.get("id") or f"call_{next(self._counter)}",
+                    "id": tc.get("id") or f"{id_prefix}{next(self._counter)}",
                     "name": tc["name"],
                     "arguments": args if isinstance(args, str) else json.dumps(args),
                     "args_obj": args,
@@ -242,10 +245,24 @@ class MockServer:
             self.errors.append(f"scripted output violates the request constraint: {problem}")
 
     def plan(
-        self, req: dict[str, Any], step: Step, n_prompt: int
+        self,
+        req: dict[str, Any],
+        step: Step,
+        n_prompt: int,
+        *,
+        id_prefix: str = "call_",
+        keep_partial_tools: bool = False,
+        reasoning: bool = True,
     ) -> tuple[_Gen, list[tuple[str, Any]], int]:
-        """Flatten a generation into (kind, piece) tokens, applying the output limits."""
-        g = self.build(req, step)
+        """Flatten a generation into (kind, piece) tokens, applying the output limits.
+
+        ``keep_partial_tools`` keeps a call cut off by the limit as a partial call (as
+        hosted APIs stream it) instead of surfacing it as text like llama-server;
+        ``reasoning=False`` generates no reasoning (thinking switched off).
+        """
+        g = self.build(req, step, id_prefix)
+        if not reasoning:
+            g.reasoning = []
         max_tokens = req.get("max_tokens", req.get("n_predict", -1))
         if max_tokens is None or max_tokens < 0:
             max_tokens = 1 << 30
@@ -269,7 +286,11 @@ class MockServer:
                 if not take("tool", [(tc, p, j == 0) for j, p in enumerate(arg_pieces)]):
                     break
         generated = len(pieces)
-        if truncated:
+        if truncated and keep_partial_tools:
+            g.finish_reason = "length"
+            started = {id(it[0]) for kind, it in pieces if kind == "tool"}
+            g.tool_calls = [tc for tc in g.tool_calls if id(tc) in started]
+        elif truncated:
             g.finish_reason = "length"
             # Calls cut mid-way are not parsed; their text surfaces as content, like llama-server.
             done_calls: dict[str, str] = {}
@@ -395,6 +416,19 @@ class _Handler(BaseHTTPRequestHandler):
                 "top_provider": {"context_length": m.n_ctx, "max_completion_tokens": 16384},
             }
             self._json(200, {"data": [row]})
+        elif path.startswith("/v1/models/"):
+            name = path.removeprefix("/v1/models/")
+            self._json(
+                200,
+                {
+                    "id": name,
+                    "type": "model",
+                    "display_name": name,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "max_input_tokens": m.n_ctx,
+                    "max_tokens": 64000,
+                },
+            )
         elif path in ("/v1/models", "/models") and f != "openrouter":
             row: dict[str, Any] = {"id": m.model, "object": "model", "owned_by": "argus-mock"}
             if f == "vllm":
@@ -443,6 +477,13 @@ class _Handler(BaseHTTPRequestHandler):
             )
         elif path in ("/v1/chat/completions", "/chat/completions", "/api/v1/chat/completions"):
             self._chat(body)
+        elif path == "/v1/messages":
+            self._anthropic(body)
+        elif path == "/v1/messages/count_tokens":
+            from argus.mock import anthropic as fmt
+
+            n = len(self.mock.prompt_tokens(fmt.to_canonical(body)))
+            self._json(200, {"input_tokens": n})
         else:
             self._error(404, f"no route {path}", "not_found_error")
 
@@ -670,6 +711,180 @@ class _Handler(BaseHTTPRequestHandler):
                 )
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            with m._lock:
+                m.aborted += 1
+
+    # -- Anthropic Messages API ----------------------------------------------------------------
+
+    def _anthropic_error(self, status: int, kind: str, message: str) -> None:
+        from argus.mock import anthropic as fmt
+
+        self._json(status, fmt.error_body(kind, message))
+
+    def _anthropic(self, req: dict[str, Any]) -> None:
+        from argus.mock import anthropic as fmt
+
+        m = self.mock
+        canon = fmt.to_canonical(req)
+        if not self.headers.get("x-api-key"):
+            self._log_request(req, canon)
+            self._anthropic_error(401, "authentication_error", "x-api-key header is required")
+            return
+        if not self.headers.get("anthropic-version"):
+            self._log_request(req, canon)
+            self._anthropic_error(400, "invalid_request_error", "anthropic-version header required")
+            return
+        prompt = m.prompt_tokens(canon)
+        problems = fmt.validate(req) if m.strict else []
+        bad_sig = fmt.check_signatures(req) if m.enforce_thinking_binding else None
+        if problems or bad_sig or len(prompt) > m.n_ctx:
+            self._log_request(req, canon)
+            if problems:
+                m.errors.append("invalid anthropic request: " + "; ".join(problems))
+                self._anthropic_error(400, "invalid_request_error", "; ".join(problems))
+            elif bad_sig:
+                self._anthropic_error(400, "invalid_request_error", bad_sig)
+            else:
+                self._anthropic_error(
+                    400,
+                    "invalid_request_error",
+                    f"prompt is too long: {len(prompt)} tokens > {m.n_ctx} maximum",
+                )
+            return
+        step = self._take_step(req, canon)
+        if step is None:
+            return
+        if step.get("replay"):
+            self._replay(step["replay"])
+            return
+        if step.get("error"):
+            e = step["error"]
+            status = int(e.get("status", 500))
+            kind = e.get("type") or {429: "rate_limit_error", 529: "overloaded_error"}.get(
+                status, "api_error"
+            )
+            body = fmt.error_body(kind, e.get("message", "mock error"))
+            self._json(status, body, e.get("headers"))
+            return
+        thinking = req.get("thinking") or {}
+        think_on = thinking.get("type") in ("adaptive", "enabled")
+        show = thinking.get("type") == "enabled" or thinking.get("display") == "summarized"
+        cache_n = m.cache_hit(prompt)
+        g, pieces, n_gen = m.plan(
+            canon,
+            step,
+            len(prompt),
+            id_prefix="toolu_mock_",
+            keep_partial_tools=True,
+            reasoning=think_on,
+        )
+        blocks = fmt.group_blocks(pieces, show)
+        shown = "".join("".join(b["pieces"]) for b in blocks if b["type"] == "thinking")
+        signature = fmt.sign(req, shown)
+        usage = fmt.usage(req, len(prompt), cache_n, n_gen)
+        stop = fmt.stop_reason(step, g.finish_reason)
+        details = fmt.stop_details(step)
+        m.record_response(g, pieces, usage)
+        message = {
+            "id": f"msg_mock_{next(m._counter)}",
+            "type": "message",
+            "role": "assistant",
+            "model": req.get("model", m.model),
+            "content": [fmt.final_block(b, signature) for b in blocks],
+            "stop_reason": stop,
+            "stop_sequence": None,
+            "usage": usage,
+        }
+        if details:
+            message["stop_details"] = details
+        if not req.get("stream"):
+            self._json(200, message)
+            return
+        self._anthropic_stream(step, message, blocks, signature, details)
+
+    def _anthropic_stream(
+        self,
+        step: Step,
+        message: dict[str, Any],
+        blocks: list[dict[str, Any]],
+        signature: str,
+        details: dict[str, Any] | None,
+    ) -> None:
+        m = self.mock
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        delay = float(step.get("chunk_delay", m.chunk_delay))
+
+        def send(event: str, data: dict[str, Any]) -> None:
+            self.wfile.write(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode())
+            self.wfile.flush()
+
+        usage = message["usage"]
+        start = {**message, "content": [], "stop_reason": None}
+        start["usage"] = {**usage, "output_tokens": 1}
+        start.pop("stop_details", None)
+        try:
+            send("message_start", {"type": "message_start", "message": start})
+            send("ping", {"type": "ping"})
+            for i, b in enumerate(blocks):
+                if b["type"] == "thinking":
+                    head: dict[str, Any] = {"type": "thinking", "thinking": "", "signature": ""}
+                elif b["type"] == "text":
+                    head = {"type": "text", "text": ""}
+                else:
+                    head = {"type": "tool_use", "id": b["tc"]["id"], "name": b["tc"]["name"]}
+                    head["input"] = {}
+                send(
+                    "content_block_start",
+                    {"type": "content_block_start", "index": i, "content_block": head},
+                )
+                for piece in b["pieces"]:
+                    if delay:
+                        time.sleep(delay)
+                    if b["type"] == "thinking":
+                        if not piece:
+                            continue
+                        delta = {"type": "thinking_delta", "thinking": piece}
+                    elif b["type"] == "text":
+                        delta = {"type": "text_delta", "text": piece}
+                    else:
+                        delta = {"type": "input_json_delta", "partial_json": piece}
+                    send(
+                        "content_block_delta",
+                        {"type": "content_block_delta", "index": i, "delta": delta},
+                    )
+                if b["type"] == "thinking":
+                    sig = {"type": "signature_delta", "signature": signature}
+                    send(
+                        "content_block_delta",
+                        {"type": "content_block_delta", "index": i, "delta": sig},
+                    )
+                send("content_block_stop", {"type": "content_block_stop", "index": i})
+            if step.get("stream_error"):
+                e = step["stream_error"]
+                err = {
+                    "type": e.get("type", "overloaded_error"),
+                    "message": e.get("message", "Overloaded"),
+                }
+                send("error", {"type": "error", "error": err})
+                return
+            delta: dict[str, Any] = {"stop_reason": message["stop_reason"], "stop_sequence": None}
+            if details:
+                delta["stop_details"] = details
+            send(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": delta,
+                    "usage": {"output_tokens": usage["output_tokens"]},
+                },
+            )
+            send("message_stop", {"type": "message_stop"})
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             with m._lock:
                 m.aborted += 1

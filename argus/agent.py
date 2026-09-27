@@ -32,7 +32,7 @@ from argus.fsstate import (
 )
 from argus.prompt import PromptParts, base_prompt
 from argus.protocols import Parsed, Protocol, ToolCall, make_protocol
-from argus.providers import Provider, provider_from_config
+from argus.providers import Provider, provider_from_config, strip_replay
 from argus.providers.base import Completion, ContextOverflow, Delta, LLMError
 from argus.skills import (
     Skill,
@@ -366,6 +366,10 @@ class _Run:
             self.projection_from = len(self.context) - 1  # the new assistant message onwards
             self.rep.turn_end(turn, c, parsed)
 
+            if c.finish_reason == "refusal":
+                self.fail(turn, "refusal", c.refusal or "the model declined the request")
+                self.finish("failed", c.content.strip())
+                return
             if c.finish_reason == "length" and not parsed.calls:
                 self.fail(turn, "token_cap", f"turn hit max_tokens ({self.last_max_tokens})")
                 self.check_degenerate(turn, c)
@@ -514,6 +518,11 @@ class _Run:
             self.finish("error")
             return None
         self.result.llm_ms += c.total_ms
+        for note in c.notes:
+            self.store.add_event(self.id, turn, "provider_note", note)
+            self.rep.note(note)
+        if c.replay_rejected:
+            self.drop_replay("rejected by the provider")
         return c
 
     def monitors(self) -> list:
@@ -741,7 +750,28 @@ class _Run:
         if changed:
             self.last_prompt = projected
             self.projection_from = len(self.context)
+            self.drop_replay("compaction")
         return changed
+
+    def drop_replay(self, reason: str) -> None:
+        """Stop replaying provider state (thinking signatures) after a history edit.
+
+        Providers bind replayed reasoning to the exact conversation that produced it,
+        so once the history has been rewritten, older state would be rejected.
+        """
+        dropped = []
+        for i, (mid, msg) in enumerate(self.context):
+            if "replay" in msg and not msg["replay"].get("stripped"):
+                rest = strip_replay(msg["replay"])
+                new = {k: v for k, v in msg.items() if k != "replay"}
+                if rest is not None:
+                    new["replay"] = {**rest, "stripped": True}
+                self.context[i] = (mid, new)
+                dropped.append(mid)
+        if dropped:
+            self.store.add_event(
+                self.id, self.turn, "replay_dropped", {"reason": reason, "message_ids": dropped}
+            )
 
     def log_compaction(self, turn: int, c: Compaction) -> None:
         self.store.add_compaction(

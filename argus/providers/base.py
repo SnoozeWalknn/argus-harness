@@ -95,6 +95,8 @@ class Completion:
     stop_raw: str | None = None  # the provider's own stop reason
     refusal: str | None = None  # refusal text or category, when the model declined
     replay: dict[str, Any] | None = None  # provider state to send back with this message
+    notes: list[str] = field(default_factory=list)  # adapter decisions worth logging
+    replay_rejected: bool = False  # the API refused replayed state; stop sending it
     provider: str = ""
     model: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
@@ -172,6 +174,7 @@ class ProviderOptions:
     effort: str = ""  # reasoning effort, where the API has one
     thinking_budget: int = 0  # reasoning token budget, where the API takes one
     cache: bool = True  # prompt caching, where the API needs it requested
+    thinking: str = ""  # thinking format: "" = the adapter's default, or e.g. adaptive | budget
     headers: dict[str, str] = field(default_factory=dict)
 
 
@@ -248,6 +251,7 @@ class Provider:
     kind = "base"
     default_base_url = ""
     token_chunks = False
+    retry_statuses: tuple[int, ...] = (408, 429, 503, 529)
 
     def __init__(
         self,
@@ -279,6 +283,15 @@ class Provider:
 
     def auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+
+    @staticmethod
+    def strip_replay(replay: dict[str, Any]) -> dict[str, Any] | None:
+        """Replay state without its reasoning, for history that was edited.
+
+        What remains (e.g. the exact tool-call blocks) keeps later requests identical
+        to the one the provider last accepted.
+        """
+        return None
 
     def close(self) -> None:
         self.http.close()
@@ -397,7 +410,7 @@ class Provider:
             msg = body["message"]
         text = f"{kind} {msg}"
         cls = self.error_class(resp.status_code, text, body)
-        retryable = cls is LLMError and resp.status_code in (408, 429, 503, 529)
+        retryable = cls is LLMError and resp.status_code in self.retry_statuses
         raise cls(
             f"HTTP {resp.status_code}: {msg}",
             status=resp.status_code,

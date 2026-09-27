@@ -35,7 +35,11 @@ def _id(p: Path) -> str:
 
 
 def run_fixture(fx: dict):
-    server = MockServer(Script([{"replay": fx["response"]}]), model=fx.get("model", "m")).start()
+    server = MockServer(
+        Script([{"replay": fx["response"]}]),
+        model=fx.get("model", "m"),
+        enforce_thinking_binding=False,  # real signatures are opaque to the mock
+    ).start()
     try:
         kind = fx["provider"]
         base = server.root + BASE_PATHS.get(kind, "/v1")
@@ -107,4 +111,4 @@ def test_fixture(path: Path):
 
 def test_fixtures_exist_for_every_provider():
     kinds = {json.loads(p.read_text())["provider"] for p in fixture_files()}
-    assert {"openai_compat", "openrouter"} <= kinds
+    assert {"openai_compat", "openrouter", "anthropic"} <= kinds
