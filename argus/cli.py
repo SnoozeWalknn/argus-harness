@@ -53,15 +53,24 @@ def _config(args: argparse.Namespace, pick: bool = False) -> Config:
 
 
 def model_overrides(spec: str) -> list[str]:
-    """``-m anthropic/claude-opus-5`` → provider and model overrides."""
+    """``-m anthropic/claude-opus-5`` → provider and model overrides. Also takes aliases
+    (``-m opus``) and a server URL after ``@`` (``-m ollama/qwen3@http://gpu:11434/v1``)."""
+    from argus.profiles import resolve_alias
     from argus.providers import parse_spec
 
+    spec = resolve_alias(spec.strip())
+    url = ""
+    head, at, tail = spec.rpartition("@")
+    if at and tail.startswith(("http://", "https://")):
+        spec, url = head, tail
     provider, model = parse_spec(spec)
     out = []
     if provider:
         out.append(f"model.provider={json.dumps(provider)}")
     if model:
         out.append(f"model.model={json.dumps(model)}")
+    if url:
+        out.append(f"model.base_url={json.dumps(url)}")
     return out
 
 
@@ -118,7 +127,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 2
         finally:
             store.close()
-    reporter = ConsoleReporter(verbose=args.verbose) if not args.quiet else None
+    # in a terminal, show thinking and replies as they stream unless --brief
+    stream = args.verbose or (sys.stderr.isatty() and not getattr(args, "brief", False))
+    reporter = ConsoleReporter(verbose=stream) if not args.quiet else None
     agent = Agent(cfg, reporter=reporter, approver=_approver(args, cfg))
     try:
         result = agent.run(task, session=session)
@@ -569,6 +580,13 @@ def cmd_models(args: argparse.Namespace) -> int:
             f"{p.protocol or '-':<12}{think or '-':<22}{price:>13}  {p.source}"
         )
     print()
+    from argus.choices import cloud
+
+    print("aliases (-m NAME, /model NAME in the TUI):")
+    for c in cloud():
+        mark = "●" if c.ready else "○"
+        print(f"  {mark} {c.name:<12}{c.spec:<36}{c.note}")
+    print()
     keys = [n for names in KEY_ENV.values() for n in names if os.environ.get(n)]
     print("API keys set: " + (", ".join(keys) if keys else "none"))
     if args.detect:
@@ -717,7 +735,15 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("-f", "--task-file", help="read the task from a file")
     r.add_argument("-w", "--workdir", help="workspace directory (local executor)")
     _add_config_args(r)
-    r.add_argument("-v", "--verbose", action="store_true", help="stream reasoning and content")
+    r.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="stream thinking and replies (default in a terminal)",
+    )
+    r.add_argument(
+        "--brief", action="store_true", help="in a terminal: tool calls and a token counter only"
+    )
     r.add_argument("-q", "--quiet", action="store_true", help="no progress output")
     r.add_argument("--json", action="store_true", help="print a JSON result on stdout")
     r.add_argument("--record", metavar="DIR", help="save every model API exchange as a fixture")
@@ -764,6 +790,7 @@ def build_parser() -> argparse.ArgumentParser:
     rs_.add_argument("-w", "--workdir")
     _add_config_args(rs_)
     rs_.add_argument("-v", "--verbose", action="store_true")
+    rs_.add_argument("--brief", action="store_true")
     rs_.add_argument("-q", "--quiet", action="store_true")
     rs_.add_argument("--json", action="store_true")
     rs_.add_argument("--record", metavar="DIR")

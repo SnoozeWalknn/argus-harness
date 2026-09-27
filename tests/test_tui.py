@@ -268,3 +268,104 @@ def test_a_refusal_is_shown_and_the_session_goes_on(mock, workspace, db_path, mo
 
     run(go())
     assert [m["role"] for m in server.requests[1]["messages"]] == ["user"]
+
+
+def test_slash_commands(mock, workspace, db_path, monkeypatch, tmp_path):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-000000000")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    server = mock([])
+    app = ArgusApp(factory(server, workspace, db_path))
+
+    async def command(pilot, text):
+        app.query_one("#prompt").value = text
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+    async def go():
+        async with app.run_test(size=(140, 40)) as pilot:
+            await command(pilot, "/model sonnet")
+            assert app.cfg.model.model == "claude-sonnet-5"
+            assert app.agent.llm.kind == "anthropic"
+            await command(pilot, "/plan")
+            assert app.mode == "plan"
+            await command(pilot, "/build")
+            assert app.mode == "build"
+            await command(pilot, "/think")
+            assert app.query_one("#transcript").has_class("hide-thinking")
+            await command(pilot, "/theme nord")
+            assert app.theme == "nord"
+            await command(pilot, "/help")
+            assert len(app.screen_stack) == 2
+            await pilot.press("escape")
+            await command(pilot, "/nonsense")  # a notice, nothing else
+            assert len(app.screen_stack) == 1 and not texts(app, ".user")
+
+    run(go())
+
+
+def test_picker_filters_and_enter_picks(mock, workspace, db_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza-000000")
+    server = mock([])
+    app = ArgusApp(factory(server, workspace, db_path))
+
+    async def go():
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.press("ctrl+o")
+            await until(pilot, lambda: len(app.screen.query("#picker-input")) == 1)
+            await pilot.press(*"flas")  # filter to gemini/gemini-2.5-flash
+            await pilot.press("enter")
+            await until(pilot, lambda: len(app.screen_stack) == 1)
+            assert app.cfg.model.model == "gemini-2.5-flash"
+
+    run(go())
+
+
+def test_meter_counts_tokens(mock, workspace, db_path):
+    server = mock([{"reasoning": "hmm " * 30, **final("done")}])
+    app = ArgusApp(factory(server, workspace, db_path))
+
+    async def go():
+        async with app.run_test(size=(140, 40)) as pilot:
+            await send(app, pilot, "go")
+            app.refresh_meter()
+            meter = str(app.query_one("#meter").content)
+            assert meter.startswith("○ idle\nlast ↓ ")
+            assert app.meter.last_tokens > 30 and app.meter.session_out > 30
+            assert "ctx " in meter and "in " in meter
+
+    run(go())
+
+
+def test_grammar_protocol_streams_the_thought(mock, workspace, db_path):
+    server = mock([])
+    app = ArgusApp(factory(server, workspace, db_path, 'agent.protocol="grammar"'))
+
+    async def go():
+        async with app.run_test(size=(140, 40)) as pilot:
+            app.on_agent_turn_start("", 0)
+            app.on_agent_delta("", "content", '{"thought":"reading calc.py to see', 5)
+            await pilot.pause(0.05)
+            shown = texts(app, ".assistant")
+            assert shown == ["reading calc.py to see"]  # not the raw JSON
+
+    run(go())
+
+
+def test_jobs_survive_a_model_switch(mock, workspace, db_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-000000000")
+    server = mock([call("bash", cmd="echo up; sleep 60", background=True), final("started")])
+    app = ArgusApp(factory(server, workspace, db_path, "tools.job_start_wait=1"))
+
+    async def go():
+        async with app.run_test(size=(140, 40)) as pilot:
+            await send(app, pilot, "start the server")
+            job = app.jobs.jobs[1]
+            assert job.status() == "running"
+            app.switch_model("anthropic/claude-sonnet-5")
+            assert app.jobs.refresh(job) is None  # still running under the new agent
+            app.refresh_jobs()
+            assert "1 ● echo up; sleep 60" in str(app.query_one("#jobs").content)
+        return job
+
+    job = asyncio.run(go())
+    assert job.status() == "killed"  # quitting the app stops its jobs

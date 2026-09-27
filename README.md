@@ -48,12 +48,15 @@ first cloud API whose key is set (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
 stderr. To choose, pass `-m`:
 
 ```sh
-argus run -m anthropic/claude-opus-5 "..."
+argus run -m opus "..."                      # aliases: fable opus sonnet haiku gpt gpt-mini
+argus run -m flash "..."                     #          gemini gemini-3 flash qwen-cloud local
+argus run -m anthropic/claude-opus-5 "..."   # or provider/model
 argus run -m openai/gpt-5 "..."
-argus run -m gemini/gemini-2.5-pro "..."
 argus run -m ollama/qwen3-coder:30b "..."
 argus run -m openrouter/qwen/qwen3-coder "..."
 argus run -m llama/qwen3-coder-30b "..."     # llama-server at model.base_url
+argus run -m ollama/qwen3-coder:30b@http://gpu-box:11434/v1 "..."   # any server: spec@url
+argus models                                 # what is ready (keys set, servers up)
 
 # a local model with tool calling (needs --jinja), and optionally a small model for compaction
 llama-server -m Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf --jinja -c 65536 -ngl 99 --port 8080
@@ -197,22 +200,44 @@ edited file are appended to the edit's result. Works over SSH too.
 ## The TUI
 
 A thin client of the same headless agent (the agent runs in a worker thread;
-the UI shows what the reporter callbacks say). Transcript with reasoning,
-tool calls, results and diffs; a sidebar with todos, changed files and the
-session; a status line with model, provider, mode, approval policy, tokens,
-cost and context use.
+the UI shows what the reporter callbacks say):
+
+- **thinking and replies as they stream**: reasoning appears live under
+  "∴ thinking" (ctrl+r or `/think` hides it), then the reply; under the
+  `grammar`/`json_schema` protocols the JSON action's `thought` streams as
+  text instead of raw JSON;
+- **a token box** in the sidebar: what the model is doing (thinking, writing,
+  running a tool), tokens generated this turn and tok/s live, turn and elapsed
+  time, context use, session totals, cost, and a sparkline of recent tok/s;
+- tool calls with their results and diffs; todos, changed files, background
+  jobs and the session in the sidebar; a status line with model, provider,
+  mode and approval policy.
+
+**Switching models** takes ctrl+o (or `/model`): a list of the models you
+can use right now (● ready, ○ needs a key or a server): recent ones, models
+on local servers that answer, and the cloud aliases. Type to filter and press
+enter, or type any spec (`anthropic/claude-sonnet-5`,
+`ollama/qwen3@http://host:11434/v1`). `/model opus` switches directly. The
+session carries over (history converted between protocols, reasoning state
+kept where the new model accepts it), and background jobs keep running.
 
 | key | |
 |---|---|
 | enter | send (a follow-up continues the session) |
+| / | commands: `/model [spec]`, `/new`, `/sessions`, `/plan`, `/build`, `/think`, `/jobs`, `/diff`, `/theme [name]`, `/clear`, `/help`, `/quit` (→ accepts the suggestion) |
 | tab | plan / build mode |
 | ctrl+o | switch model (mid-session) |
+| ctrl+r | show / hide thinking |
 | ctrl+s / ctrl+n | open a session / start a new one |
 | ctrl+d | diff of the last run |
 | ctrl+t | next theme |
 | esc | interrupt the run |
 | y / a / n | approve once / always / deny, in an approval |
 | ctrl+p / ctrl+q | command palette / quit |
+
+`argus run` in a terminal streams thinking and replies too, with per-turn
+tokens and tok/s; `--brief` shows tool calls and a live token counter
+instead, `-q` nothing.
 
 Themes: Textual's built-ins plus matte-black, everforest, kanagawa,
 osaka-jade and ristretto. With `tui.theme = "auto"` the TUI uses your last

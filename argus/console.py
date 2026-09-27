@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from typing import Any, TextIO
 
 from argus.agent import Reporter, RunResult, brief_args
@@ -47,29 +48,64 @@ def first_line(text: str, limit: int = 100) -> str:
 
 
 class ConsoleReporter(Reporter):
+    """Progress on stderr. ``verbose`` streams thinking and replies as they come (the
+    default in a terminal); otherwise a terminal gets a live token line instead."""
+
     def __init__(
         self,
         stream: TextIO | None = None,
         verbose: bool = False,
         color: bool | None = None,
         prefix: str = "",
+        live: bool | None = None,
     ):
         self.out = stream or sys.stderr
         self.verbose = verbose
         self.s = Style(self.out, color)
         self._streaming: str | None = None
         self.prefix = prefix  # subagent output is indented under the parent's
+        if live is None:
+            live = not verbose and self.out.isatty()
+        self.live = live  # a transient "↓ 812 tok · 41 tok/s" line while the model writes
+        self._live_shown = False
+        self._live_at = 0.0
+        self._first: float | None = None
 
     def _p(self, text: str) -> None:
         self._end_stream()
+        self._clear_live()
         if self.prefix:
             text = "\n".join(self.prefix + line for line in text.split("\n"))
         print(text, file=self.out, flush=True)
 
     def child(self, name: str) -> ConsoleReporter:
         return ConsoleReporter(
-            self.out, self.verbose, self.s.color, prefix=self.prefix + self.s.dim(f"{name} │ ")
+            self.out,
+            self.verbose,
+            self.s.color,
+            prefix=self.prefix + self.s.dim(f"{name} │ "),
+            live=self.live,
         )
+
+    def _clear_live(self) -> None:
+        if self._live_shown:
+            self.out.write("\r\x1b[2K")
+            self._live_shown = False
+
+    def _show_live(self, d: Delta) -> None:
+        now = time.monotonic()
+        if self._first is None:
+            self._first = now
+        if now - self._live_at < 0.1:
+            return
+        self._live_at = now
+        n = d.completion.completion_tokens
+        rate = n / (now - self._first) if now - self._first > 0.2 else 0
+        phase = {"reasoning": "thinking", "content": "writing"}.get(d.kind, "calling a tool")
+        line = f"  {phase} · ↓ {n} tok" + (f" · {rate:.0f} tok/s" if rate else "")
+        self.out.write("\r\x1b[2K" + self.s.dim(self.prefix + line))
+        self.out.flush()
+        self._live_shown = True
 
     def todos(self, turn: int, items: list[dict[str, Any]]) -> None:
         from argus.tools.todo import MARKS
@@ -91,7 +127,13 @@ class ConsoleReporter(Reporter):
     def run_start(self, run_id: str, task: str) -> None:
         self._p(self.s.dim(f"run {run_id}: {first_line(task, 120)}"))
 
+    def turn_start(self, turn: int) -> None:
+        self._first = None
+
     def delta(self, d: Delta) -> None:
+        if self.live and not self.verbose:
+            self._show_live(d)
+            return
         if not self.verbose or d.kind == "tool":
             return
         if self._streaming != d.kind:
@@ -103,6 +145,9 @@ class ConsoleReporter(Reporter):
 
     def turn_end(self, turn: int, c: Completion, p: Parsed) -> None:
         stats = f"{c.prompt_tokens}→{c.completion_tokens} tok, {c.total_ms / 1000:.1f}s"
+        gen_s = (c.total_ms - (c.ttft_ms or 0)) / 1000
+        if c.completion_tokens and gen_s > 0.05:
+            stats += f", {c.completion_tokens / gen_s:.0f} tok/s"
         if c.cached_tokens:
             stats += f", cache {c.cached_tokens}"
         if c.aborted:

@@ -3,12 +3,13 @@
 Nothing here runs the agent differently from ``argus run``: the TUI builds an
 :class:`~argus.agent.Agent`, runs it in a worker thread, and shows what its
 :class:`~argus.agent.Reporter` callbacks report. Callbacks go into one queue that
-the UI drains a few times per second, so streamed tokens and tool calls stay in
+the UI drains many times a second, so streamed tokens and tool calls stay in
 order and the UI never blocks the model. Approvals are the one blocking call:
 the worker waits on a modal until you answer.
 
-Keys: enter send · tab plan/build · ctrl+o model · ctrl+t theme · ctrl+s sessions ·
-ctrl+n new session · ctrl+d diff of the last run · esc interrupt · ctrl+q quit.
+Keys: enter send · tab plan/build · ctrl+o model · ctrl+r show/hide thinking ·
+ctrl+t theme · ctrl+s sessions · ctrl+n new session · ctrl+d diff of the last run ·
+esc interrupt · ctrl+q quit. Slash commands: type / in the prompt (/help lists them).
 """
 
 from __future__ import annotations
@@ -28,15 +29,34 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.suggester import SuggestFromList
 from textual.widgets import Button, Footer, Input, Label, Markdown, OptionList, Static
 from textual.widgets.option_list import Option
 
 from argus.agent import Agent, Reporter, RunResult, brief_args, first_line
 from argus.approval import Approver, Request
 from argus.config import Config
+from argus.tools.jobs import Jobs
 from argus.tui import themes
+from argus.tui.live import Meter, constrained_view
 
 CHANGED = re.compile(r"\[files changed: (.*?)\]")
+
+COMMANDS = {
+    "/model": "switch model: /model opus, /model ollama/qwen3-coder:30b (no argument: pick)",
+    "/models": "pick a model from the list",
+    "/new": "start a new session",
+    "/sessions": "open an earlier session",
+    "/plan": "plan mode: read-only exploration ending in a plan",
+    "/build": "build mode: the agent may edit and run commands",
+    "/think": "show or hide the model's thinking",
+    "/jobs": "background jobs and their latest output",
+    "/diff": "what the last run changed",
+    "/theme": "next theme, or /theme NAME",
+    "/clear": "clear the transcript (the session keeps its history)",
+    "/help": "this list",
+    "/quit": "quit",
+}
 
 
 class TUIReporter(Reporter):
@@ -56,8 +76,9 @@ class TUIReporter(Reporter):
         self._put("turn_start", turn)
 
     def delta(self, d: Any) -> None:
-        if d.kind != "tool":
-            self._put("delta", d.kind, d.text)
+        # tool-call arguments count in the meter but are not shown as text
+        text = d.text if d.kind != "tool" else ""
+        self._put("delta", d.kind, text, d.completion.completion_tokens)
 
     def turn_end(self, turn: int, c: Any, p: Any) -> None:
         # p.content is the visible text (a JSON action's "thought" under constrained protocols)
@@ -148,35 +169,66 @@ class ApprovalScreen(ModalScreen[str]):
 
 
 class PickerScreen(ModalScreen[str | None]):
-    """A filterable list with an input for free text (model specs)."""
+    """A filterable list. With a placeholder it also takes free text (model specs):
+    enter picks the highlighted entry, or uses what was typed when it looks like a spec
+    (has a / or @) or nothing matches."""
 
-    BINDINGS = [Binding("escape", "dismiss(None)", "close")]
+    BINDINGS = [
+        Binding("escape", "dismiss(None)", "close"),
+        Binding("down", "move(1)", "down", show=False),
+        Binding("up", "move(-1)", "up", show=False),
+    ]
 
-    def __init__(self, title: str, options: list[tuple[str, str]], placeholder: str = ""):
+    def __init__(
+        self,
+        title: str,
+        options: list[tuple[str, Any]],
+        placeholder: str = "",
+        subtitle: str = "",
+    ):
         super().__init__()
         self.title_text = title
-        self.options = options  # (value, label)
+        self.subtitle = subtitle
+        # (value, label, plain text for filtering); a label may be rich Text
+        self.options = [(v, lbl, str(getattr(lbl, "plain", lbl)).lower()) for v, lbl in options]
         self.placeholder = placeholder
 
     def compose(self) -> ComposeResult:
         with Vertical(id="picker"):
             yield Label(self.title_text, id="picker-title")
+            if self.subtitle:
+                yield Label(self.subtitle, classes="dim")
             if self.placeholder:
                 yield Input(placeholder=self.placeholder, id="picker-input")
-            yield OptionList(
-                *[Option(label, id=value) for value, label in self.options], id="picker-list"
-            )
+            yield OptionList(*[Option(lbl, id=v) for v, lbl, _ in self.options], id="picker-list")
+
+    def on_mount(self) -> None:
+        if self.options:
+            self.query_one(OptionList).highlighted = 0
+
+    def action_move(self, step: int) -> None:
+        lst = self.query_one(OptionList)
+        if lst.option_count:
+            lst.highlighted = ((lst.highlighted or 0) + step) % lst.option_count
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        needle = event.value.lower()
+        needle = event.value.lower().strip()
         lst = self.query_one(OptionList)
         lst.clear_options()
-        lst.add_options(
-            [Option(label, id=v) for v, label in self.options if needle in label.lower()]
-        )
+        lst.add_options([Option(lbl, id=v) for v, lbl, plain in self.options if needle in plain])
+        if lst.option_count:
+            lst.highlighted = 0
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.dismiss(event.value.strip() or None)
+        typed = event.value.strip()
+        lst = self.query_one(OptionList)
+        picked = None
+        if lst.option_count and lst.highlighted is not None:
+            picked = lst.get_option_at_index(lst.highlighted).id
+        if typed and ("/" in typed or "@" in typed or picked is None):
+            self.dismiss(typed)
+        else:
+            self.dismiss(picked or typed or None)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(event.option.id)
@@ -207,6 +259,7 @@ class ArgusApp(App):
         Binding("ctrl+q", "quit", "quit", priority=True),
         Binding("tab", "toggle_mode", "plan/build", priority=True),
         Binding("ctrl+o", "pick_model", "model"),
+        Binding("ctrl+r", "toggle_thinking", "thinking"),
         Binding("ctrl+t", "next_theme", "theme"),
         Binding("ctrl+s", "sessions", "sessions"),
         Binding("ctrl+n", "new_session", "new"),
@@ -229,15 +282,18 @@ class ArgusApp(App):
         self.events: deque = deque()
         self.pending_answers: list[Callable[[str | None], None]] = []
         self.approver = approver or TUIApprover(self)
+        self.jobs = Jobs()  # background jobs outlive model and mode switches
         self.agent: Agent | None = None
         self.running = False
         self.runs_done = 0
         self.last_run: str | None = None
+        self.show_thinking = self.cfg.tui.show_reasoning
         self.stream: dict[str, Static] = {}  # current turn's streaming widgets
         self.stream_text: dict[str, str] = {}
         self.tools: list[tuple[Any, str]] = []  # (widget, header) of calls in progress
         self.todo_items: list[dict[str, Any]] = []
         self.changed: list[str] = []
+        self.meter = Meter()
         self.totals = {"prompt": 0, "gen": 0, "cost": 0.0, "ctx": 0}
 
     # -- layout -----------------------------------------------------------------------------------
@@ -247,35 +303,57 @@ class ArgusApp(App):
         with Horizontal(id="body"):
             yield VerticalScroll(id="transcript")
             with Vertical(id="sidebar"):
+                yield Static(id="meter")
                 yield Static("todo", classes="side-title")
                 yield Static("—", id="todo")
                 yield Static("changed", classes="side-title")
                 yield Static("—", id="changed")
+                yield Static("jobs", classes="side-title")
+                yield Static("—", id="jobs")
                 yield Static("session", classes="side-title")
                 yield Static("new", id="session")
         yield Input(
-            placeholder="Ask argus…  (enter to send · tab plan/build · ctrl+o model)", id="prompt"
+            placeholder="Ask argus…  (enter send · / commands · ctrl+o model · tab plan/build)",
+            id="prompt",
+            suggester=SuggestFromList(self._suggestions(), case_sensitive=False),
         )
         yield Footer()
+
+    def _suggestions(self) -> list[str]:
+        from argus.profiles import load_aliases
+
+        try:
+            aliases = list(load_aliases())
+        except Exception:  # a broken user models.toml must not stop the TUI
+            aliases = []
+        return list(COMMANDS) + [f"/model {a}" for a in aliases]
 
     def on_mount(self) -> None:
         for t in themes.EXTRA:
             self.register_theme(t)
         self.theme = themes.initial(self.cfg.tui.theme, set(self.available_themes))
         self.theme_changed_signal.subscribe(self, lambda _: self.refresh_status())
+        self.query_one("#meter", Static).border_title = "tokens"
+        self.query_one("#transcript").set_class(not self.show_thinking, "hide-thinking")
         self.set_interval(1 / 20, self.drain)
+        self.set_interval(0.2, self.refresh_meter)
+        self.set_interval(2.0, self.refresh_jobs)
         self.agent = self.build_agent()
         if self.session_id:
             self.load_session(self.session_id)
         self.refresh_status()
+        self.refresh_meter()
         self.query_one("#prompt", Input).focus()
 
     def build_agent(self) -> Agent:
         cfg = copy.deepcopy(self.cfg)
         cfg.agent.mode = self.mode
-        agent = Agent(cfg, reporter=TUIReporter(self.events), approver=self.approver)
+        agent = Agent(
+            cfg, reporter=TUIReporter(self.events), approver=self.approver, jobs=self.jobs
+        )
         for note in agent.notes:
             self.add_line(note, "note")
+        self.meter.window = agent.context_window() or 0
         return agent
 
     def refresh_status(self) -> None:
@@ -300,13 +378,47 @@ class ArgusApp(App):
         sid = self.session_id or "new"
         self.query_one("#session", Static).update(Text(f"{sid}\n{self.theme}"))
 
+    def refresh_meter(self) -> None:
+        theme = self.current_theme
+        styles = {
+            "phase": f"bold {theme.accent or theme.primary}",
+            "phase-idle": "dim",
+            "big": "bold",
+            "dim": "dim",
+            "warn": f"bold {theme.warning}",
+            "spark": str(theme.primary),
+        }
+        text = Text()
+        for i, (line, style) in enumerate(self.meter.lines()):
+            text.append(("\n" if i else "") + line, style=styles.get(style, ""))
+        self.query_one("#meter", Static).update(text)
+
+    def refresh_jobs(self) -> None:
+        if not self.jobs.jobs:
+            return
+        remote = self.agent is not None and self.agent.executor.kind != "local"
+        if remote and not self.running:
+            return  # over SSH every poll is a round trip; tool events refresh the list
+        lines = [
+            f"{j.id} {'●' if j.status() == 'running' else '○'} {first_line(j.cmd, 26)}"
+            for j in self._jobs()
+        ]
+        self.query_one("#jobs", Static).update(Text("\n".join(lines[-8:]) or "—"))
+
+    def _jobs(self) -> list[Any]:
+        for j in self.jobs.jobs.values():
+            self.jobs.refresh(j)
+        return list(self.jobs.jobs.values())
+
     # -- transcript -------------------------------------------------------------------------------------
 
-    def add_line(self, text: str, cls: str, markdown: bool = False) -> Static | Markdown:
+    def add_line(self, text: str | Text, cls: str, markdown: bool = False) -> Static | Markdown:
         box = self.query_one("#transcript", VerticalScroll)
-        widget: Static | Markdown = (
-            Markdown(text, classes=cls) if markdown else Static(Text(text), classes=cls)
-        )
+        widget: Static | Markdown
+        if markdown:
+            widget = Markdown(str(text), classes=cls)
+        else:
+            widget = Static(text if isinstance(text, Text) else Text(text), classes=cls)
         box.mount(widget)
         box.scroll_end(animate=False)
         return widget
@@ -327,37 +439,60 @@ class ArgusApp(App):
 
     def on_agent_turn_start(self, agent: str, turn: int) -> None:
         self.stream, self.stream_text = {}, {}
+        self.meter.start_turn(turn, agent)
 
-    def on_agent_delta(self, agent: str, kind: str, text: str) -> None:
-        if kind == "reasoning" and not self.cfg.tui.show_reasoning:
-            return
-        key = f"{agent}:{kind}"
+    @property
+    def constrained(self) -> bool:
+        return self.agent is not None and self.agent.protocol.name != "native"
+
+    def _show(self, agent: str, kind: str, text: str) -> None:
+        """Update (or start) this turn's streaming widget for thinking or text."""
+        key = f"{agent}:{kind}:view"
         if key not in self.stream:
             self.stream[key] = self.add_line(
                 "", "reasoning" if kind == "reasoning" else "assistant"
             )  # type: ignore[assignment]
-            self.stream_text[key] = ""
-        self.stream_text[key] += text
-        self.stream[key].update(Text(self._indent(agent, self.stream_text[key])))
+        if kind == "reasoning":
+            body = Text()
+            body.append(self._indent(agent, "∴ thinking\n"), style="bold")
+            body.append(text)
+            self.stream[key].update(body)
+        else:
+            self.stream[key].update(Text(self._indent(agent, text)))
         self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
+
+    def on_agent_delta(self, agent: str, kind: str, text: str, tokens: int = 0) -> None:
+        self.meter.stream(kind, tokens, agent)
+        if not text:
+            return
+        key = f"{agent}:{kind}"
+        self.stream_text[key] = self.stream_text.get(key, "") + text
+        raw = self.stream_text[key]
+        if kind == "content" and self.constrained:
+            # a JSON action: show its thought (and a <think> prefix) as they stream
+            think, saying = constrained_view(raw)
+            if think:
+                self._show(agent, "reasoning", think)
+            if saying:
+                self._show(agent, "content", saying)
+            return
+        self._show(agent, kind, raw)
 
     def on_agent_turn_end(
         self, agent: str, turn: int, prompt: int, gen: int, final: str | None, visible: str
     ) -> None:
+        self.meter.end_turn(prompt, gen, agent)
         if not agent:
             self.totals["prompt"] += prompt
             self.totals["gen"] += gen
             self.totals["ctx"] = prompt + gen
-        key = f"{agent}:content"
-        streamed = self.stream.get(key)
-        constrained = self.agent is not None and self.agent.protocol.name != "native"
-        if streamed is not None and (
-            final is not None or constrained or self.stream_text[key] != visible
-        ):
+        streamed = self.stream.get(f"{agent}:content:view")
+        shown = self.stream_text.get(f"{agent}:content", "")
+        if streamed is not None and (final is not None or self.constrained or shown != visible):
             # a final answer is shown rendered; a JSON action (constrained protocols) is
             # replaced by its thought, the call itself shows as a tool line
             streamed.remove()
-            if final is None and visible.strip() and visible != self.stream_text[key]:
+            if final is None and visible.strip():
                 self.add_line(self._indent(agent, visible.strip()), "assistant")
         if final is not None and not agent:
             self.add_line(final, "final", markdown=True)
@@ -365,6 +500,7 @@ class ArgusApp(App):
         self.refresh_status()
 
     def on_agent_tool_start(self, agent: str, name: str, args: str) -> None:
+        self.meter.tool(name, agent)
         head = self._indent(agent, f"▸ {name}({args})")
         self.tools.append((self.add_line(head, "tool"), head))  # type: ignore[arg-type]
 
@@ -378,6 +514,7 @@ class ArgusApp(App):
         more = f"\n    … {len(lines) - 6} more lines" if len(lines) > 6 else ""
         widget.update(Text(f"{head} {mark} ({ms:.0f}ms)\n{preview}{more}"))
         widget.set_class(not ok, "tool-fail")
+        self.meter.phase = "waiting"
         files = [self.relative(path)] if path else []
         m = CHANGED.search(text)
         if m:
@@ -387,6 +524,8 @@ class ArgusApp(App):
                 self.changed.append(f)
         if files:
             self.query_one("#changed", Static).update(Text("\n".join(self.changed[-15:])))
+        if name in ("bash", "job"):
+            self.refresh_jobs()
 
     def relative(self, path: str) -> str:
         root = self.cfg.executor.workdir or os.getcwd()
@@ -424,6 +563,7 @@ class ArgusApp(App):
             return
         if result.cost_usd:
             self.totals["cost"] += result.cost_usd
+            self.meter.cost = self.totals["cost"]
         if result.status not in ("completed", "refused"):  # a refusal was shown as it came
             self.add_line(
                 f"run {result.status}" + (f": {result.error}" if result.error else ""), "failure"
@@ -432,12 +572,15 @@ class ArgusApp(App):
     def on_agent_done(self, agent: str, result: RunResult | None, error: str | None) -> None:
         self.running = False
         self.runs_done += 1
+        self.meter.stop()
         if error:
             self.add_line(f"error: {error}", "failure")
         if result is not None and self.agent is not None:
             row = self.agent.store.run(result.run_id)
             self.session_id = row["session_id"] or self.session_id
         self.refresh_status()
+        self.refresh_meter()
+        self.refresh_jobs()
 
     # -- sending ----------------------------------------------------------------------------------------
 
@@ -445,6 +588,10 @@ class ArgusApp(App):
         if event.input.id != "prompt":
             return
         text = event.value.strip()
+        if text.startswith("/"):
+            event.input.value = ""
+            self.command(text)
+            return
         if not text or self.running:
             if self.running:
                 self.notify("still working; esc interrupts", severity="warning")
@@ -452,6 +599,7 @@ class ArgusApp(App):
         event.input.value = ""
         self.add_line(f"› {text}", "user")
         self.running = True
+        self.meter.start_run()
         self.refresh_status()
         self.run_worker(lambda: self._run(text), thread=True, group="agent", name="run")
 
@@ -463,6 +611,54 @@ class ArgusApp(App):
         except Exception as e:  # shown in the transcript; the app keeps running
             error = f"{type(e).__name__}: {e}"
         self.events.append(("done", "", (result, error)))
+
+    def command(self, text: str) -> None:
+        """Slash commands typed in the prompt."""
+        name, _, arg = text.partition(" ")
+        name, arg = name.lower(), arg.strip()
+        if name == "/model" and arg:
+            self.switch_model(arg)
+        elif name in ("/model", "/models"):
+            self.action_pick_model()
+        elif name == "/new":
+            self.action_new_session()
+        elif name == "/sessions":
+            self.action_sessions()
+        elif name in ("/plan", "/build"):
+            if (name == "/plan") != (self.mode == "plan"):
+                self.action_toggle_mode()
+        elif name == "/think":
+            self.action_toggle_thinking()
+        elif name == "/jobs":
+            self.show_jobs()
+        elif name == "/diff":
+            self.action_diff()
+        elif name == "/theme":
+            if arg and arg in self.available_themes:
+                self.theme = arg
+                themes.save_theme(arg)
+            elif arg:
+                self.notify(f"no theme {arg!r}", severity="error")
+            else:
+                self.action_next_theme()
+        elif name == "/clear":
+            self.query_one("#transcript", VerticalScroll).remove_children()
+        elif name == "/quit":
+            self.run_action("quit")
+        elif name == "/help":
+            body = Text()
+            for cmd, what in COMMANDS.items():
+                body.append(f"{cmd:<10}", style="bold")
+                body.append(f" {what}\n")
+            body.append("\nkeys: ", style="bold")
+            body.append(
+                "enter send · tab plan/build · ctrl+o model · ctrl+r thinking · ctrl+t theme · "
+                "ctrl+s sessions · ctrl+n new · ctrl+d diff · esc interrupt · ctrl+p palette · "
+                "ctrl+q quit"
+            )
+            self.push_screen(TextScreen("commands (esc to close)", body))
+        else:
+            self.notify(f"unknown command {name}; /help lists them", severity="warning")
 
     # -- approvals --------------------------------------------------------------------------------------
 
@@ -482,6 +678,7 @@ class ArgusApp(App):
             self.agent.cancel()
         for answered in list(self.pending_answers):
             answered("no")
+        self.jobs.close()
 
     # -- actions ----------------------------------------------------------------------------------------
 
@@ -501,6 +698,11 @@ class ArgusApp(App):
         )
         self.refresh_status()
 
+    def action_toggle_thinking(self) -> None:
+        self.show_thinking = not self.show_thinking
+        self.query_one("#transcript").set_class(not self.show_thinking, "hide-thinking")
+        self.notify("thinking shown" if self.show_thinking else "thinking hidden")
+
     def rebuild(self, old: Agent | None) -> Agent:
         if old is not None:
             old.close()
@@ -519,16 +721,33 @@ class ArgusApp(App):
 
     def action_pick_model(self) -> None:
         if not self._main_screen() or self.running:
+            if self.running:
+                self.notify("switch models between runs (esc interrupts)", severity="warning")
             return
-        from argus.profiles import load_profiles
+        from argus.choices import model_choices
 
-        options = [
-            (name, f"{name}  ·  {p.provider or 'local'}{'  ·  ' + p.notes if p.notes else ''}")
-            for name, p in load_profiles().items()
-        ]
+        store = self.agent.store if self.agent is not None else None
+        choices = model_choices(store)
+        w_name = min(max((len(c.name) for c in choices), default=8), 22)
+        w_spec = min(max((len(c.spec) for c in choices), default=20), 56)
+        options = []
+        for c in choices:
+            label = Text(no_wrap=True, overflow="ellipsis")
+            label.append("● " if c.ready else "○ ", style="green" if c.ready else "dim")
+            label.append(f"{c.name[:w_name]:<{w_name}}", style="bold" if c.ready else "dim")
+            label.append(f"  {c.spec[:w_spec]:<{w_spec}}", style="dim")
+            label.append(f"  {c.group:<6}", style="italic")
+            if c.note:
+                label.append(f"  {c.note}", style="dim" if c.ready else "yellow")
+            options.append((c.spec, label))
+        where = self.agent.llm.describe() if self.agent is not None else ""
         self.push_screen(
             PickerScreen(
-                "model (enter a provider/model spec or pick a profile)", options, "provider/model"
+                "switch model",
+                options,
+                "filter, or type a spec: anthropic/claude-sonnet-5, ollama/qwen3@http://host:11434/v1",
+                subtitle=f"now: {self.cfg.model.model} · {where}   ● ready  ○ needs a key or "
+                "server   the session carries over",
             ),
             self.switch_model,
         )
@@ -536,15 +755,21 @@ class ArgusApp(App):
     def switch_model(self, spec: str | None) -> None:
         if not spec:
             return
+        if self.running:
+            self.notify("switch models between runs (esc interrupts)", severity="warning")
+            return
         try:
             cfg = self.make_config(spec)
         except Exception as e:
             self.notify(f"cannot use {spec}: {e}", severity="error")
             return
+        old_cfg = self.cfg
         self.cfg = cfg
         try:
             self.agent = self.rebuild(self.agent)
         except Exception as e:
+            self.cfg = old_cfg
+            self.agent = self.build_agent()
             self.notify(f"cannot use {spec}: {e}", severity="error")
             return
         self.add_line(
@@ -552,6 +777,22 @@ class ArgusApp(App):
             "note",
         )
         self.refresh_status()
+
+    def show_jobs(self) -> None:
+        jobs = self._jobs()
+        if not jobs:
+            self.notify("no background jobs")
+            return
+        body = Text()
+        for j in jobs:
+            body.append(f"job {j.id} · {j.status()} · pid {j.handle.pid}\n", style="bold")
+            body.append(f"$ {j.cmd}\n", style="dim")
+            try:
+                tail = j.handle.read(0).decode("utf-8", "replace").splitlines()[-12:]
+            except Exception as e:  # e.g. the SSH connection is gone
+                tail = [f"(output unavailable: {e})"]
+            body.append("\n".join(tail) + "\n\n")
+        self.push_screen(TextScreen("background jobs (esc to close)", body))
 
     def action_sessions(self) -> None:
         if not self._main_screen() or self.running or self.agent is None:
@@ -598,6 +839,7 @@ class ArgusApp(App):
         self.session_id = None
         self.query_one("#transcript", VerticalScroll).remove_children()
         self.totals = {"prompt": 0, "gen": 0, "cost": 0.0, "ctx": 0}
+        self.meter = Meter(window=self.meter.window)
         self.changed, self.todo_items = [], []
         self.query_one("#todo", Static).update("—")
         self.query_one("#changed", Static).update("—")
@@ -627,4 +869,5 @@ class ArgusApp(App):
         if self.agent is not None:
             self.agent.cancel()
             self.agent.close()
+        self.jobs.close()
         self.exit()

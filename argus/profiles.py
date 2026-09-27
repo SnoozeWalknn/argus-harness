@@ -100,6 +100,27 @@ def _read(path: Path) -> dict[str, Any]:
         raise ProfileError(f"{path}: {e}") from None
 
 
+def load_aliases(path: Path | None = None) -> dict[str, str]:
+    """Short model names (``opus``, ``flash``…): the catalog's, then the user's."""
+    text = resources.files("argus.data").joinpath("models.toml").read_text()
+    aliases = dict(tomllib.loads(text).get("aliases") or {})
+    path = path or user_path()
+    try:
+        aliases.update(tomllib.loads(path.read_text()).get("aliases") or {})
+    except FileNotFoundError:
+        pass
+    except tomllib.TOMLDecodeError as e:
+        raise ProfileError(f"{path}: {e}") from None
+    return {str(k): str(v) for k, v in aliases.items()}
+
+
+def resolve_alias(spec: str) -> str:
+    """``opus`` → ``anthropic/claude-opus-5-5``; ``opus@http://…`` keeps the URL."""
+    name, at, url = spec.partition("@")
+    target = load_aliases().get(name.strip())
+    return f"{target}{at}{url}" if target else spec
+
+
 def builtin_profiles() -> dict[str, Profile]:
     text = resources.files("argus.data").joinpath("models.toml").read_text()
     tables = tomllib.loads(text).get("profiles") or {}

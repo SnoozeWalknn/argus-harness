@@ -20,10 +20,19 @@ Screen {
 }
 
 #sidebar {
-    width: 34;
+    width: 38;
     padding: 0 1;
     border-left: vkey $panel;
     color: $foreground;
+}
+
+#meter {
+    height: auto;
+    border: round $accent;
+    border-title-color: $accent;
+    border-title-style: bold;
+    padding: 0 1;
+    margin-top: 1;
 }
 
 .side-title {
@@ -41,6 +50,12 @@ Screen {
 .reasoning {
     color: $text-muted;
     text-style: italic;
+    border-left: outer $accent 40%;
+    padding-left: 1;
+}
+
+.hide-thinking .reasoning {
+    display: none;
 }
 
 .tool {
@@ -101,7 +116,8 @@ ApprovalScreen, PickerScreen, TextScreen {
 }
 
 #picker, #text-screen {
-    width: 100;
+    width: 90%;
+    max-width: 150;
     height: 80%;
     border: thick $primary;
     background: $surface;
