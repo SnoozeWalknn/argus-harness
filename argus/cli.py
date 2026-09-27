@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -413,6 +414,135 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+LOCAL_SERVERS = [
+    ("llama_server", "http://127.0.0.1:8080/v1"),
+    ("ollama", "http://127.0.0.1:11434/v1"),
+    ("lmstudio", "http://127.0.0.1:1234/v1"),
+    ("vllm", "http://127.0.0.1:8000/v1"),
+]
+
+
+def _k(n: int) -> str:
+    if not n:
+        return "-"
+    return f"{n // 1000}k" if n >= 1000 else str(n)
+
+
+def cmd_models(args: argparse.Namespace) -> int:
+    from argus.profiles import load_profiles
+    from argus.providers import KEY_ENV, make_provider
+
+    if args.spec:
+        return _model_detail(args)
+    profiles = load_profiles()
+    if args.json:
+        print(json.dumps({n: p.to_dict() for n, p in profiles.items()}, indent=2))
+        return 0
+    head = f"{'profile':<22}{'provider':<11}{'ctx':>7}  {'protocol':<12}{'thinking':<22}{'$ in/out':>13}  source"
+    print(head)
+    for name, p in profiles.items():
+        think = p.thinking + (f"/{p.effort}" if p.effort else "")
+        price = (
+            f"{p.pricing.get('input', 0):g}/{p.pricing.get('output', 0):g}" if p.pricing else "-"
+        )
+        print(
+            f"{name:<22}{p.provider or 'local':<11}{_k(p.context_window):>7}  "
+            f"{p.protocol or '-':<12}{think or '-':<22}{price:>13}  {p.source}"
+        )
+    print()
+    keys = [n for names in KEY_ENV.values() for n in names if os.environ.get(n)]
+    print("API keys set: " + (", ".join(keys) if keys else "none"))
+    if args.detect:
+        print("local servers:")
+        for flavor, url in LOCAL_SERVERS:
+            p = make_provider(flavor, base_url=url, connect_timeout=0.5, retries=0)
+            d = p.detect()
+            if d.models or d.context_window:
+                print(
+                    f"  {flavor:<13}{url:<28} ctx {_k(d.context_window):>6}  {', '.join(d.models)}"
+                )
+                for note in d.notes:
+                    print(f"    note: {note}")
+            else:
+                print(f"  {flavor:<13}{url:<28} not running")
+            p.close()
+    return 0
+
+
+def _model_detail(args: argparse.Namespace) -> int:
+    from argus.providers import provider_from_config
+
+    args.model = args.spec
+    cfg = _config(args)
+    m = cfg.model
+    applied = getattr(cfg, "profile_applied", {}) or {}
+    print(f"model:     {m.model}")
+    print(f"provider:  {m.provider}  {m.base_url or '(default URL)'}")
+    print(f"profile:   {m.profile or '(none matched)'}")
+    for key, value in applied.items():
+        print(f"  {key} = {json.dumps(value)}")
+    print(f"protocol:  {cfg.agent.protocol}")
+    if args.detect:
+        p = provider_from_config(m, require_key=False)
+        d = p.detect()
+        print(f"detected:  {p.describe()}")
+        print(f"  context window {d.context_window or '?'}  max output {d.max_output or '?'}")
+        if d.capabilities:
+            print(f"  capabilities: {', '.join(sorted(d.capabilities))}")
+        if d.pricing:
+            print(f"  pricing: {json.dumps(d.pricing)}")
+        print(f"  protocols: {', '.join(p.protocols())}")
+        for note in d.notes:
+            print(f"  note: {note}")
+        p.close()
+    return 0
+
+
+def cmd_tune(args: argparse.Namespace) -> int:
+    from argus.providers import provider_from_config
+    from argus.report import format_report, summarize
+    from argus.suite import load_suite
+    from argus.tune import format_ranking, save, tune
+
+    args.model = args.spec
+    cfg = _config(args)
+    probe = provider_from_config(cfg.model)  # what can this provider serve?
+    supported = list(probe.protocols())
+    probe.close()
+    protocols = [p for p in (args.protocols or ",".join(supported)).split(",") if p]
+    unknown = [p for p in protocols if p not in supported]
+    if unknown:
+        print(f"argus: {', '.join(unknown)} not supported here; choose from {supported}")
+        return 2
+    suite = load_suite(args.suite) if args.suite else None
+    store = Store(cfg.db_path())
+    print(f"tuning {cfg.model.model} on {', '.join(protocols)}", file=sys.stderr)
+    batch_id, ranked, suite = tune(
+        cfg,
+        protocols,
+        store,
+        suite=suite,
+        repeat=args.repeat,
+        thinking=args.thinking,
+        task_ids=args.task,
+        reporter_factory=_reporter_factory(args),
+        progress=_progress(args),
+    )
+    print(format_report(summarize(store, batch_id)))
+    print()
+    print(format_ranking(ranked))
+    winner = ranked[0]
+    if winner.passes == 0:
+        print("\nno variant passed a task; nothing saved")
+        return 1
+    if args.dry_run:
+        print(f"\nbest: {winner.label} (dry run, nothing saved)")
+        return 0
+    path, name = save(cfg, ranked, batch_id, suite)
+    print(f"\nsaved protocol={winner.protocol} to {path} [profiles.{name}]")
+    return 0
+
+
 def cmd_mock_server(args: argparse.Namespace) -> int:
     from argus.mock import MockServer, Script
 
@@ -558,6 +688,30 @@ def build_parser() -> argparse.ArgumentParser:
     ov.add_argument("--offline", action="store_true", help="estimate without contacting the server")
     ov.add_argument("--json", action="store_true")
     ov.set_defaults(fn=cmd_overhead)
+
+    mo = sub.add_parser("models", help="model profiles; SPEC shows what applies to one model")
+    mo.add_argument("spec", nargs="?", help="provider/model or profile name")
+    mo.add_argument("--detect", action="store_true", help="ask servers/APIs what they report")
+    mo.add_argument("--json", action="store_true")
+    mo.add_argument("-c", "--config")
+    mo.add_argument("-o", "--override", action="append", metavar="KEY=VALUE")
+    mo.set_defaults(fn=cmd_models)
+
+    tu = sub.add_parser("tune", help="find the best protocol for a model and save it")
+    tu.add_argument("spec", help="provider/model or profile name")
+    tu.add_argument("--suite", help="suite TOML (default: argus's built-in tuning suite)")
+    tu.add_argument("--protocols", help="comma-separated (default: all the provider supports)")
+    tu.add_argument("--thinking", action="store_true", help="also try thinking on and off")
+    tu.add_argument("--dry-run", action="store_true", help="report without saving")
+    tu.add_argument("-c", "--config")
+    tu.add_argument("-o", "--override", action="append", metavar="KEY=VALUE")
+    tu.add_argument("--db")
+    tu.add_argument("-n", "--repeat", type=int, default=2)
+    tu.add_argument("-t", "--task", action="append", help="only these task ids")
+    tu.add_argument("-v", "--verbose", action="store_true", help="with --runs: stream output")
+    tu.add_argument("--runs", dest="verbose_runs", action="store_true", help="show each run")
+    tu.add_argument("-q", "--quiet", action="store_true")
+    tu.set_defaults(fn=cmd_tune)
 
     ms = sub.add_parser("mock-server", help="serve a scripted mock of llama-server")
     ms.add_argument("--script", help="JSON script file")

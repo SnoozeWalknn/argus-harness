@@ -104,8 +104,9 @@ def test_wire_body_translation():
 
 def test_thinking_modes():
     base = {"messages": [{"role": "user", "content": "x"}], "max_tokens": 8000, "temperature": 0.3}
-    w = anthropic().wire_body({**base, "thinking": {"enabled": False}}, False)
+    w = anthropic().wire_body({**base, "thinking": {"enabled": False, "effort": "xhigh"}}, False)
     assert w["thinking"] == {"type": "disabled"} and w["temperature"] == 0.3
+    assert "output_config" not in w
     always = ProviderOptions(quirks=frozenset({"thinking_always_on", "no_sampling"}))
     w = anthropic(options=always).wire_body({**base, "thinking": {"enabled": False}}, False)
     assert w["thinking"]["type"] == "adaptive" and w["output_config"] == {"effort": "low"}

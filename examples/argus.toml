@@ -10,6 +10,11 @@
 provider = "auto"
 base_url = "http://127.0.0.1:8080/v1"   # llama-server started with --jinja ("" = provider default)
 model = "qwen"
+# profile = ""            # model profile ("" = best match for the model id; see `argus models`).
+#                         # Profiles fill every key this file does not set.
+# thinking = ""           # thinking format override: adaptive | budget | none | openai |
+#                         # gemini_budget | gemini_level | qwen
+# pricing = { input = 0.0, output = 0.0, cache_read = 0.0, cache_write = 0.0 }  # USD / 1M
 # API keys come from the environment: ANTHROPIC_API_KEY, OPENAI_API_KEY,
 # GEMINI_API_KEY (or GOOGLE_API_KEY), OPENROUTER_API_KEY. They are never logged.
 # api_key_env = "MY_VLLM_KEY"           # read the key from another variable

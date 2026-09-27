@@ -359,7 +359,11 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header(k, str(v))
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):  # the client gave up (timeout tests)
+            with self.mock._lock:
+                self.mock.aborted += 1
 
     def _error(
         self,

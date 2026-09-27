@@ -180,9 +180,8 @@ class AnthropicProvider(Provider):
             out["thinking"] = {"type": "enabled", "budget_tokens": budget}
             return True
         if enabled is False and not always_on:
+            # no effort with it: some models reject "disabled" above effort high
             out["thinking"] = {"type": "disabled"}
-            if effort:
-                out["output_config"] = {"effort": effort}
             return False
         if enabled is False:  # cannot switch it off: think as little as possible
             effort = "low"

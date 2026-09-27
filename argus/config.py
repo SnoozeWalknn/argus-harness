@@ -29,6 +29,7 @@ class ModelConfig:
     provider: str = "auto"
     base_url: str = ""  # "" = the provider's default (llama-server: http://127.0.0.1:8080/v1)
     model: str = "qwen"
+    profile: str = ""  # model profile to apply ("" = the best match for the model id)
     api_key: str = ""  # prefer api_key_env or the provider's standard variable; never logged
     api_key_env: str = ""  # environment variable holding the key (default: the provider's)
     # Sampling: None leaves the value to llama-server's own defaults.
@@ -48,10 +49,12 @@ class ModelConfig:
     connect_timeout: float = 5.0
     retries: int = 2
     extra_body: dict[str, Any] = field(default_factory=dict)
+    thinking: str = ""  # thinking format for the adapter ("" = its default; see profiles)
     effort: str = ""  # reasoning effort where the API has one (low | medium | high | ...)
     thinking_budget: int = 0  # reasoning token budget where the API takes one
     cache: bool = True  # request prompt caching where the API needs it asked for
     quirks: list[str] = field(default_factory=list)  # named request adjustments, see profiles
+    pricing: dict[str, float] = field(default_factory=dict)  # USD per 1M: input, output, cache_*
     record_dir: str = ""  # save every API exchange here as a fixture (also $ARGUS_RECORD)
 
 
@@ -174,6 +177,13 @@ class Config:
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     log: LogConfig = field(default_factory=LogConfig)
 
+    @property
+    def explicit(self) -> set[str]:
+        """Dotted keys set by a config file or an override (not defaults or profiles)."""
+        if not hasattr(self, "_explicit"):
+            object.__setattr__(self, "_explicit", set())
+        return self._explicit  # type: ignore[attr-defined]
+
     def to_dict(self, redact: bool = False) -> dict[str, Any]:
         d = dataclasses.asdict(self)
         if redact:
@@ -291,6 +301,8 @@ def apply_override(cfg: Config, override: str) -> None:
     if hint is str and not isinstance(value, str):
         value = raw.strip()
     setattr(target, key, _coerce(value, hint, dotted))
+    if isinstance(cfg, Config):
+        cfg.explicit.add(dotted.strip())
 
 
 def validate(cfg: Config) -> Config:
@@ -315,9 +327,30 @@ def config_from_dict(data: dict[str, Any]) -> Config:
     return _build(Config, data)
 
 
+def explicit_keys(data: dict[str, Any]) -> set[str]:
+    """Dotted keys a TOML config sets: ``{"model": {"base_url": …}}`` → ``model.base_url``."""
+    sections = {f.name for f in dataclasses.fields(Config) if dataclasses.is_dataclass(f.type)}
+    sections |= {
+        f.name
+        for f in dataclasses.fields(Config)
+        if isinstance(f.type, str) and f.type.endswith("Config")
+    }
+    out = set()
+    for key, value in data.items():
+        if key in sections and isinstance(value, dict):
+            out |= {f"{key}.{k}" for k in value}
+        else:
+            out.add(key)
+    return out
+
+
 def load_config(
-    path: str | Path | None = None, overrides: list[str] | None = None, name: str | None = None
+    path: str | Path | None = None,
+    overrides: list[str] | None = None,
+    name: str | None = None,
+    profiles: bool = True,
 ) -> Config:
+    """Load a config file, apply overrides, then fill unset keys from the model's profile."""
     data: dict[str, Any] = {}
     if path:
         p = Path(path)
@@ -329,8 +362,16 @@ def load_config(
             raise ConfigError(f"{p}: {e}") from None
         data.setdefault("name", p.stem)
     cfg = _build(Config, data)
+    cfg.explicit.update(explicit_keys(data) - {"name"})
     for o in overrides or []:
         apply_override(cfg, o)
     if name:
         cfg.name = name
+    if profiles:
+        from argus.profiles import ProfileError, apply_profile
+
+        try:
+            apply_profile(cfg)
+        except ProfileError as e:
+            raise ConfigError(str(e)) from None
     return validate(cfg)

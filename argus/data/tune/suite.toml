@@ -1,0 +1,29 @@
+# The built-in suite `argus tune` runs when no --suite is given: small, fast
+# edits that exercise reading, exact and multi-file edits and running code.
+# Checks call Python directly, so no test runner is needed in the workspace.
+name = "tune"
+
+[defaults]
+workspace = "fixtures/proj"
+check_timeout = 60
+overrides = ["agent.max_turns=20"]
+
+[[task]]
+id = "fix-add"
+prompt = "test_add in test_calc.py fails. Fix the bug in calc.py."
+check = "python3 -c 'import test_calc as t; t.test_add(); t.test_mean()'"
+
+[[task]]
+id = "mean-empty"
+prompt = "mean([]) raises ZeroDivisionError. Make it return 0 for an empty list and keep other behaviour."
+check = "python3 -c 'import test_calc as t; t.test_mean(); t.test_mean_empty()'"
+
+[[task]]
+id = "add-median"
+prompt = "Add a median(xs) function to calc.py (the middle value; the mean of the two middle values for an even count)."
+check = "python3 -c 'from calc import median; assert median([3, 1, 2]) == 2 and median([4, 1, 3, 2]) == 2.5'"
+
+[[task]]
+id = "rename-helper"
+prompt = "Rename the function helper in pkg/util.py to assist, and update every use of it."
+check = "python3 -c 'from pkg.util import assist; from pkg.main import run; assert run() == \"help!\"' && ! grep -rn helper pkg"

@@ -114,6 +114,11 @@ class OpenAICompatProvider(Provider):
     def describe(self) -> str:
         return f"{self.flavor_name() or self.kind} {self.base_url}"
 
+    def protocols(self) -> tuple[str, ...]:
+        if self.flavor_name() in ("ollama", "lmstudio", "openrouter"):
+            return ("native", "json_schema")
+        return ("native", "json_schema", "grammar")
+
     # -- flavour -----------------------------------------------------------------------------
 
     def flavor_name(self) -> str:

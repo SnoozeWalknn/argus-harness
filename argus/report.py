@@ -50,6 +50,7 @@ class VariantStats:
     max_ctx: list[float] = field(default_factory=list)
     wall_s: list[float] = field(default_factory=list)
     overhead: list[float] = field(default_factory=list)
+    cost: list[float] = field(default_factory=list)
     statuses: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     tags: dict[str, int] = field(default_factory=lambda: defaultdict(int))  # runs with the tag
 
@@ -71,6 +72,7 @@ class VariantStats:
             "mean_max_context": self.mean(self.max_ctx),
             "mean_wall_s": self.mean(self.wall_s),
             "overhead_tokens": self.mean(self.overhead),
+            "mean_cost_usd": self.mean(self.cost) if self.cost else None,
             "statuses": dict(self.statuses),
             "failure_runs": dict(self.tags),
         }
@@ -98,6 +100,8 @@ def summarize(store: Store, batch_id: str) -> dict[str, Any]:
         v.wall_s.append((r["wall_ms"] or 0) / 1000)
         if r["overhead_tokens"] is not None:
             v.overhead.append(r["overhead_tokens"])
+        if r["cost_usd"] is not None:
+            v.cost.append(r["cost_usd"])
         v.statuses[r["status"]] += 1
         for tag in {f["tag"] for f in store.failures(r["id"])}:
             v.tags[tag] += 1
@@ -140,6 +144,8 @@ def format_report(s: dict[str, Any]) -> str:
             + ("  (completion oracle on)" if meta.get("oracle") else "")
         )
     head = f"{'variant':<14}{'pass':>8}{'rate':>7}{'95% CI':>14}{'turns':>7}{'gen tok':>9}{'prompt Σ':>10}{'max ctx':>9}{'wall s':>8}{'overhead':>9}"
+    if any(v.get("mean_cost_usd") is not None for v in s["variants"]):
+        head += f"{'$ / run':>10}"
     lines += ["", head]
     for v in s["variants"]:
         lo, hi = v["ci95"]
@@ -148,6 +154,7 @@ def format_report(s: dict[str, Any]) -> str:
             f"{f'[{100 * lo:.0f}-{100 * hi:.0f}%]':>14}{v['mean_turns']:>7.1f}{v['mean_gen_tokens']:>9.0f}"
             f"{v['mean_prompt_tokens']:>10.0f}{v['mean_max_context']:>9.0f}{v['mean_wall_s']:>8.1f}"
             f"{v['overhead_tokens']:>9.0f}"
+            + (f"{v['mean_cost_usd']:>10.4f}" if v.get("mean_cost_usd") is not None else "")
         )
     lines.append("")
     lines.append("failure tags (runs affected):")

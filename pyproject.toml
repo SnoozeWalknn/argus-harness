@@ -19,6 +19,9 @@ argus = "argus.cli:main"
 [tool.setuptools.packages.find]
 include = ["argus*"]
 
+[tool.setuptools.package-data]
+"argus.data" = ["*.toml", "tune/**/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

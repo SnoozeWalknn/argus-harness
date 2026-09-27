@@ -105,9 +105,10 @@ class ConsoleReporter(Reporter):
     def run_end(self, r: RunResult) -> None:
         color = self.s.green if r.status == "completed" else self.s.red
         tags = f" [{', '.join(r.tags)}]" if r.failures else ""
+        cost = f" · ${r.cost_usd:.4f}" if r.cost_usd is not None else ""
         self._p(
             f"{color(r.status)}{tags} · {r.turns} turns · {r.tool_calls} calls · "
-            f"{r.completion_tokens} gen tok · max ctx {r.max_context} · {r.wall_ms / 1000:.1f}s · "
+            f"{r.completion_tokens} gen tok · max ctx {r.max_context} · {r.wall_ms / 1000:.1f}s{cost} · "
             f"run {r.run_id}"
         )
         if r.error:
@@ -129,10 +130,14 @@ def render_run(store: Any, run_id: str, full: bool = False, color: bool | None =
         s.bold(f"run {run['id']}") + f"  {run['status']}",
         f"task:      {first_line(run['task'], 200)}",
         f"config:    {run['config_name']} ({run['config_hash']})  protocol={run['protocol']}  model={run['model']}",
+        f"provider:  {run['provider'] or '-'}",
         f"workspace: {run['executor']}",
         f"tokens:    prompt Σ{run['prompt_tokens']}  gen Σ{run['completion_tokens']}  "
         f"reasoning Σ{run['reasoning_tokens']}  max ctx {run['max_context_tokens']}"
-        + (f"  overhead {run['overhead_tokens']}" if run["overhead_tokens"] is not None else ""),
+        + (f"  overhead {run['overhead_tokens']}" if run["overhead_tokens"] is not None else "")
+        + (f"  cache read Σ{run['cache_read_tokens']}" if run["cache_read_tokens"] else "")
+        + (f"  cache write Σ{run['cache_write_tokens']}" if run["cache_write_tokens"] else "")
+        + (f"  cost ${run['cost_usd']:.4f}" if run["cost_usd"] is not None else ""),
         f"time:      wall {(run['wall_ms'] or 0) / 1000:.1f}s  llm {(run['llm_ms'] or 0) / 1000:.1f}s  "
         f"tools {(run['tool_ms'] or 0) / 1000:.1f}s",
     ]

@@ -350,6 +350,10 @@ class Provider:
         """Exact prompt tokens of a request, where the API can count them."""
         return None
 
+    def protocols(self) -> tuple[str, ...]:
+        """Tool-call protocols this provider can serve (see argus.protocols)."""
+        return ("native",)
+
     def tokenize(self, text: str) -> list[int]:
         raise NotSupported(f"{self.kind} has no tokenizer endpoint")
 

@@ -1,0 +1,296 @@
+# argus built-in model catalog.
+#
+# A profile says what argus needs to know about a model beyond its id: context
+# window, per-turn output cap, tool-call protocol, thinking format, quirks and
+# pricing (USD per million tokens). The profile whose `match` pattern fits the
+# model id best is applied to every config key the user did not set.
+#
+# This is data, not code, and it dates quickly: override any field in
+# ~/.config/argus/models.toml (same table layout), let `argus tune MODEL` write
+# the protocol that works best, and check prices against the provider.
+#
+# Anthropic prices: platform price list as of 2026-06. OpenAI and Gemini
+# prices: as of late 2025, verify before relying on cost reports.
+#
+# Fields: match, provider, base_url, model, context_window, max_output,
+# protocol, thinking, effort, thinking_budget, enable_thinking, sampling,
+# quirks, chat_template_kwargs, pricing, compaction_model, tier, notes.
+# thinking formats: adaptive | budget | none (anthropic), openai (effort),
+# gemini_budget | gemini_level, qwen (chat_template enable_thinking).
+
+# -- Anthropic ----------------------------------------------------------------------------
+
+[profiles.claude-fable-5-1]
+match = ["claude-fable-5-1*", "claude-mythos-5-1*"]
+provider = "anthropic"
+context_window = 1_000_000
+max_output = 64000
+protocol = "native"
+thinking = "adaptive"
+effort = "xhigh"
+quirks = ["no_sampling", "thinking_always_on", "no_forced_tool_choice"]
+pricing = { input = 10.0, output = 50.0, cache_read = 0.25, cache_write = 12.5 }
+compaction_model = "claude-haiku-4-5"
+tier = "frontier"
+
+[profiles.claude-fable-5]
+match = ["claude-fable-5", "claude-mythos-5"]
+provider = "anthropic"
+context_window = 1_000_000
+max_output = 64000
+protocol = "native"
+thinking = "adaptive"
+effort = "xhigh"
+quirks = ["no_sampling", "thinking_always_on"]
+pricing = { input = 10.0, output = 50.0, cache_read = 1.0, cache_write = 12.5 }
+compaction_model = "claude-haiku-4-5"
+tier = "frontier"
+
+[profiles.claude-opus-5-5]
+match = ["claude-opus-5-5*"]
+provider = "anthropic"
+context_window = 1_000_000
+max_output = 64000
+protocol = "native"
+thinking = "adaptive"
+effort = "high"            # the API default for this model is medium
+quirks = ["no_sampling", "thinking_always_on", "no_forced_tool_choice"]
+pricing = { input = 4.0, output = 20.0, cache_read = 0.2, cache_write = 5.0 }
+compaction_model = "claude-haiku-4-5"
+tier = "frontier"
+
+[profiles.claude-opus-5]
+match = ["claude-opus-5"]
+provider = "anthropic"
+context_window = 1_000_000
+max_output = 64000
+protocol = "native"
+thinking = "adaptive"
+effort = "xhigh"
+quirks = ["no_sampling"]
+pricing = { input = 5.0, output = 25.0, cache_read = 0.5, cache_write = 6.25 }
+compaction_model = "claude-haiku-4-5"
+tier = "frontier"
+
+[profiles.claude-opus-4]
+match = ["claude-opus-4-8*", "claude-opus-4-7*"]
+provider = "anthropic"
+context_window = 1_000_000
+max_output = 64000
+protocol = "native"
+thinking = "adaptive"
+effort = "xhigh"
+quirks = ["no_sampling"]
+pricing = { input = 5.0, output = 25.0, cache_read = 0.5, cache_write = 6.25 }
+compaction_model = "claude-haiku-4-5"
+tier = "frontier"
+
+[profiles.claude-opus-4-6]
+match = ["claude-opus-4-6*"]
+provider = "anthropic"
+context_window = 1_000_000
+max_output = 64000
+protocol = "native"
+thinking = "adaptive"
+effort = "high"
+pricing = { input = 5.0, output = 25.0, cache_read = 0.5, cache_write = 6.25 }
+compaction_model = "claude-haiku-4-5"
+tier = "frontier"
+
+[profiles.claude-sonnet-5]
+match = ["claude-sonnet-5*"]
+provider = "anthropic"
+context_window = 1_000_000
+max_output = 64000
+protocol = "native"
+thinking = "adaptive"
+effort = "xhigh"
+quirks = ["no_sampling"]
+pricing = { input = 2.0, output = 10.0, cache_read = 0.2, cache_write = 2.5 }
+compaction_model = "claude-haiku-4-5"
+tier = "frontier"
+
+[profiles.claude-sonnet-4-6]
+match = ["claude-sonnet-4-6*"]
+provider = "anthropic"
+context_window = 1_000_000
+max_output = 64000
+protocol = "native"
+thinking = "adaptive"
+effort = "high"
+pricing = { input = 3.0, output = 15.0, cache_read = 0.3, cache_write = 3.75 }
+compaction_model = "claude-haiku-4-5"
+tier = "frontier"
+
+[profiles.claude-haiku-4-5]
+match = ["claude-haiku-4-5*"]
+provider = "anthropic"
+context_window = 200_000
+max_output = 32000
+protocol = "native"
+thinking = "budget"        # extended thinking with budget_tokens; off unless asked for
+pricing = { input = 1.0, output = 5.0, cache_read = 0.1, cache_write = 1.25 }
+tier = "frontier"
+
+[profiles.claude]
+match = ["claude-*"]
+provider = "anthropic"
+context_window = 200_000
+max_output = 32000
+protocol = "native"
+thinking = "adaptive"
+compaction_model = "claude-haiku-4-5"
+tier = "frontier"
+notes = "fallback for Claude models not listed above"
+
+# -- OpenAI (Responses API) ------------------------------------------------------------------
+
+[profiles.gpt-5]
+match = ["gpt-5", "gpt-5-2*", "gpt-5-codex*", "gpt-5.*"]
+provider = "openai"
+context_window = 272_000   # input limit; 400k including output
+max_output = 64000
+protocol = "native"
+thinking = "openai"
+effort = "medium"
+quirks = ["no_sampling"]
+pricing = { input = 1.25, output = 10.0, cache_read = 0.125 }
+compaction_model = "gpt-5-mini"
+tier = "frontier"
+
+[profiles.gpt-5-mini]
+match = ["gpt-5-mini*"]
+provider = "openai"
+context_window = 272_000
+max_output = 64000
+protocol = "native"
+thinking = "openai"
+effort = "medium"
+quirks = ["no_sampling"]
+pricing = { input = 0.25, output = 2.0, cache_read = 0.025 }
+tier = "frontier"
+
+[profiles.gpt-5-nano]
+match = ["gpt-5-nano*"]
+provider = "openai"
+context_window = 272_000
+max_output = 32000
+protocol = "native"
+thinking = "openai"
+quirks = ["no_sampling"]
+pricing = { input = 0.05, output = 0.4, cache_read = 0.005 }
+tier = "frontier"
+
+[profiles.o-series]
+match = ["o3*", "o4-mini*"]
+provider = "openai"
+context_window = 200_000
+max_output = 64000
+protocol = "native"
+thinking = "openai"
+quirks = ["no_sampling"]
+pricing = { input = 2.0, output = 8.0, cache_read = 0.5 }
+tier = "frontier"
+
+[profiles.gpt-4-1]
+match = ["gpt-4.1*"]
+provider = "openai"
+context_window = 1_047_576
+max_output = 32768
+protocol = "native"
+thinking = "none"
+pricing = { input = 2.0, output = 8.0, cache_read = 0.5 }
+tier = "frontier"
+
+# -- Gemini ----------------------------------------------------------------------------------
+
+[profiles.gemini-3-pro]
+match = ["gemini-3*"]
+provider = "gemini"
+context_window = 1_048_576
+max_output = 65536
+protocol = "native"
+thinking = "gemini_level"
+quirks = ["no_sampling", "thought_signatures"]   # keep the default temperature of 1.0
+pricing = { input = 2.0, output = 12.0, cache_read = 0.2 }   # prompts up to 200k tokens
+compaction_model = "gemini-2.5-flash"
+tier = "frontier"
+
+[profiles.gemini-2-5-pro]
+match = ["gemini-2.5-pro*"]
+provider = "gemini"
+context_window = 1_048_576
+max_output = 65536
+protocol = "native"
+thinking = "gemini_budget"
+pricing = { input = 1.25, output = 10.0, cache_read = 0.31 }  # prompts up to 200k tokens
+compaction_model = "gemini-2.5-flash"
+tier = "frontier"
+
+[profiles.gemini-2-5-flash]
+match = ["gemini-2.5-flash*"]
+provider = "gemini"
+context_window = 1_048_576
+max_output = 65536
+protocol = "native"
+thinking = "gemini_budget"
+pricing = { input = 0.3, output = 2.5, cache_read = 0.075 }
+tier = "frontier"
+
+[profiles.gemini-2-5-flash-lite]
+match = ["gemini-2.5-flash-lite*"]
+provider = "gemini"
+context_window = 1_048_576
+max_output = 65536
+protocol = "native"
+thinking = "gemini_budget"
+pricing = { input = 0.1, output = 0.4, cache_read = 0.025 }
+tier = "frontier"
+
+# -- Local models (llama-server, Ollama, vLLM, LM Studio) --------------------------------------
+# No provider: they apply on whichever OpenAI-compatible server serves them.
+# The context window comes from the server when it can say (/props, /api/show, ...).
+
+[profiles.qwen3-coder]
+match = ["qwen3-coder*", "*qwen3-coder*", "*Qwen3-Coder*"]
+protocol = "grammar"
+max_output = 8192
+sampling = { temperature = 0.7, top_p = 0.8, top_k = 20, repeat_penalty = 1.05 }
+tier = "local"
+notes = "no thinking mode; grammar protocol keeps the prompt small"
+
+[profiles.qwen3]
+match = ["qwen3*", "*Qwen3*", "*qwen3*"]
+protocol = "grammar"
+max_output = 8192
+thinking = "qwen"
+sampling = { temperature = 0.6, top_p = 0.95, top_k = 20, min_p = 0.0 }
+tier = "local"
+
+[profiles.gpt-oss]
+match = ["gpt-oss*", "*gpt-oss*"]
+protocol = "native"        # harmony channels; argus's grammar would fight the template
+max_output = 16384
+effort = "medium"
+sampling = { temperature = 1.0, top_p = 1.0 }
+tier = "local"
+
+[profiles.devstral]
+match = ["*devstral*", "*Devstral*"]
+protocol = "native"
+max_output = 8192
+sampling = { temperature = 0.15 }
+tier = "local"
+
+[profiles.glm]
+match = ["glm-4*", "*GLM-4*", "*glm-4*"]
+protocol = "native"
+max_output = 8192
+thinking = "qwen"
+tier = "local"
+
+[profiles.deepseek]
+match = ["deepseek*", "*DeepSeek*"]
+protocol = "native"
+max_output = 8192
+tier = "local"

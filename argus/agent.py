@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from argus.compact import HEAD, SUMMARY_PREFIX, Compaction, Compactor
-from argus.config import Config
+from argus.config import Config, ConfigError
 from argus.detect import (
     LoopDetector,
     LoopVerdict,
@@ -30,6 +30,7 @@ from argus.fsstate import (
     mass_deletion,
     summarize,
 )
+from argus.profiles import turn_cost
 from argus.prompt import PromptParts, base_prompt
 from argus.protocols import Parsed, Protocol, ToolCall, make_protocol
 from argus.providers import Provider, provider_from_config, strip_replay
@@ -81,6 +82,7 @@ class RunResult:
     reasoning_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    cost_usd: float | None = None
     max_context: int = 0
     wall_ms: float = 0.0
     llm_ms: float = 0.0
@@ -120,6 +122,9 @@ class Agent:
         self.llm: Provider = llm or provider_from_config(cfg.model)
         self.store = store or Store(cfg.db_path())
         self.reporter = reporter or Reporter()
+        self.notes: list[str] = []  # decisions made while setting up, logged with each run
+        self.check_protocol()
+        self._pricing: dict[str, float] | None = None
         self.tools: dict[str, Tool] = build_tools(cfg.tools)
         self.agents_md: list[tuple[str, str]] = []
         self.skills: list[Skill] = []
@@ -131,6 +136,30 @@ class Agent:
         self._n_ctx: int | None = None
         self.counter = TokenCounter(self.llm)
         self.compactor = Compactor(cfg.compaction, self.counter)
+
+    def check_protocol(self) -> None:
+        """Fail on a protocol the provider cannot serve if the user asked for it; if it came
+        from a profile, fall back to one that works."""
+        a = self.cfg.agent
+        supported = self.llm.protocols()
+        if a.protocol in supported:
+            return
+        if "agent.protocol" in self.cfg.explicit:
+            raise ConfigError(
+                f"{self.llm.describe()} cannot serve the {a.protocol!r} protocol; "
+                f"use one of: {', '.join(supported)}"
+            )
+        fallback = "json_schema" if "json_schema" in supported else "native"
+        self.notes.append(
+            f"protocol {a.protocol} is not available on {self.llm.describe()}; using {fallback}"
+        )
+        a.protocol = fallback
+
+    def pricing(self) -> dict[str, float]:
+        """USD per 1M tokens: the profile/config figures, else what the provider publishes."""
+        if self._pricing is None:
+            self._pricing = dict(self.cfg.model.pricing) or dict(self.llm.detect().pricing)
+        return self._pricing
 
     def load_context(self) -> None:
         """AGENTS.md files and skills. Failures are recorded, never fatal."""
@@ -158,8 +187,14 @@ class Agent:
         )
 
     def context_window(self) -> int:
+        """Configured window if the user set one, else what the server reports, else the
+        profile's figure (the server knows what it actually serves; the catalog guesses)."""
         if self._n_ctx is None:
-            self._n_ctx = self.cfg.model.context_window or self.llm.context_window()
+            m = self.cfg.model
+            if m.context_window and "model.context_window" in self.cfg.explicit:
+                self._n_ctx = m.context_window
+            else:
+                self._n_ctx = self.llm.context_window() or m.context_window
         return self._n_ctx
 
     def sampling(self) -> dict[str, Any]:
@@ -281,6 +316,16 @@ class _Run:
                 self.record_overhead()
             if self.cfg.checkpoint.enabled:
                 self.start_checkpoints()
+            applied = getattr(self.cfg, "profile_applied", None)
+            if self.cfg.model.profile or a.notes:
+                self.store.add_event(
+                    self.id,
+                    None,
+                    "profile",
+                    {"profile": self.cfg.model.profile, "applied": applied, "notes": a.notes},
+                )
+            for note in a.notes:
+                self.rep.note(note)
             self.store.add_event(
                 self.id,
                 None,
@@ -321,6 +366,7 @@ class _Run:
                 reasoning_tokens=r.reasoning_tokens,
                 cache_read_tokens=r.cache_read_tokens,
                 cache_write_tokens=r.cache_write_tokens,
+                cost_usd=None if r.cost_usd is None else round(r.cost_usd, 6),
                 max_context_tokens=r.max_context,
                 wall_ms=round(r.wall_ms, 1),
                 llm_ms=round(r.llm_ms, 1),
@@ -551,6 +597,9 @@ class _Run:
         r.reasoning_tokens += reasoning_tokens
         r.cache_read_tokens += c.cached_tokens
         r.cache_write_tokens += c.cache_write_tokens
+        cost = turn_cost(c, self.agent.pricing())
+        if cost is not None:
+            r.cost_usd = (r.cost_usd or 0.0) + cost
         r.max_context = max(r.max_context, c.prompt_tokens + c.completion_tokens)
         t = c.timings
         self.store.add_turn(
@@ -561,6 +610,7 @@ class _Run:
             completion_tokens=c.completion_tokens,
             cached_tokens=c.cached_tokens,
             cache_write_tokens=c.cache_write_tokens or None,
+            cost_usd=None if cost is None else round(cost, 8),
             reasoning_tokens=reasoning_tokens,
             content_tokens=content_tokens,
             reasoning=c.reasoning,
