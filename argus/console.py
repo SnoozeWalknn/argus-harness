@@ -102,6 +102,12 @@ class ConsoleReporter(Reporter):
     def note(self, text: str) -> None:
         self._p(self.s.dim(f"  · {text}"))
 
+    def approval(self, turn: int, call: ToolCall, decision: Any) -> None:
+        if not decision.allow:
+            self._p(self.s.yellow(f"    ⊘ {call.name} denied: {decision.reason}"))
+        elif decision.asked:
+            self._p(self.s.dim(f"    ✓ approved ({decision.answer})"))
+
     def run_end(self, r: RunResult) -> None:
         color = self.s.green if r.status == "completed" else self.s.red
         tags = f" [{', '.join(r.tags)}]" if r.failures else ""

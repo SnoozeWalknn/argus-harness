@@ -77,6 +77,8 @@ class AgentConfig:
     repetition_window: int = 400  # chars examined for degenerate repetition, 0 = off
     overrun_turns: int = 2  # tool turns after a completion claim before tagging overrun
     reasoning_retry: bool = True  # after a reasoning-budget abort, retry once with thinking off
+    approval: str = "auto"  # read-only | ask | auto | full (see argus.approval)
+    headless_approval: str = "deny"  # answer to "ask" when nobody can be asked: deny | allow
 
 
 @dataclass
@@ -108,6 +110,14 @@ class ExecutorConfig:
     control_persist: str = "10m"
     shell: str = "bash"
     env: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class SandboxConfig:
+    backend: str = "auto"  # auto | bwrap | landlock | none
+    network: bool = True  # allow network in the workspace-write sandbox
+    writable: list[str] = field(default_factory=list)  # extra writable paths, e.g. "~/.cache"
+    required: bool = False  # refuse to run commands when no sandbox is available
 
 
 @dataclass
@@ -172,6 +182,7 @@ class Config:
     agent: AgentConfig = field(default_factory=AgentConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     executor: ExecutorConfig = field(default_factory=ExecutorConfig)
+    sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
@@ -313,6 +324,15 @@ def validate(cfg: Config) -> Config:
             raise ConfigError(f"{where}.provider must be one of {PROVIDERS}, got {value!r}")
     if cfg.agent.protocol not in PROTOCOLS:
         raise ConfigError(f"agent.protocol must be one of {PROTOCOLS}, got {cfg.agent.protocol!r}")
+    from argus.approval import POLICIES
+    from argus.sandbox import BACKENDS
+
+    if cfg.agent.approval not in POLICIES:
+        raise ConfigError(f"agent.approval must be one of {POLICIES}, got {cfg.agent.approval!r}")
+    if cfg.agent.headless_approval not in ("deny", "allow"):
+        raise ConfigError("agent.headless_approval must be deny or allow")
+    if cfg.sandbox.backend not in BACKENDS:
+        raise ConfigError(f"sandbox.backend must be one of {BACKENDS}, got {cfg.sandbox.backend!r}")
     if cfg.executor.kind not in EXECUTORS:
         raise ConfigError(f"executor.kind must be one of {EXECUTORS}, got {cfg.executor.kind!r}")
     if cfg.executor.kind == "ssh" and not (cfg.executor.host and cfg.executor.workdir):

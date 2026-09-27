@@ -26,7 +26,7 @@ class BashTool(Tool):
             raise ToolError("empty command")
         timeout = float(args.get("timeout") or ctx.cfg.bash_timeout)
         timeout = min(max(timeout, 1.0), max(ctx.cfg.bash_timeout * 5, ctx.cfg.bash_timeout))
-        r = ctx.executor.run(cmd, timeout=timeout)
+        r = ctx.executor.run(cmd, timeout=timeout, sandbox=ctx.sandbox)
         text, truncated = self.shrink(ctx, r.output)
         if truncated and r.total_bytes > len(text):
             n_lines = r.output.count("\n") + 1
@@ -47,6 +47,7 @@ class BashTool(Tool):
                 "timed_out": r.timed_out,
                 "output_bytes": r.total_bytes,
                 "cmd_ms": round(r.duration_ms, 1),
+                "sandbox": ctx.sandbox.mode if ctx.sandbox is not None else "off",
             },
         )
 

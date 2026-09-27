@@ -152,7 +152,7 @@ def test_profile_protocol_falls_back_when_the_server_cannot(make_agent):
     assert agent.cfg.agent.protocol == "json_schema"
     result = agent.run("x")
     assert result.status == "completed"
-    ev = agent.store.events(result.run_id, "profile")
+    ev = agent.store.events(result.run_id, "setup")
     assert "not available" in ev[0]["data_json"]
     assert request_protocol(server.requests[0]) == "json_schema"
 

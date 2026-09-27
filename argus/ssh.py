@@ -130,7 +130,12 @@ class SSHExecutor(Executor):
         merge_stderr: bool = True,
         cwd: str | None = None,
         capture_bytes: int | None = None,
+        sandbox: object = None,
     ) -> CmdResult:
+        if sandbox is not None and getattr(sandbox, "mode", "off") != "off":
+            raise ValueError(
+                "the SSH executor cannot sandbox commands; the remote host is the boundary"
+            )
         self._probe()
         script = self.script(cmd, self.resolve(cwd) if cwd else None, timeout)
         # Local deadline is a backstop; the remote `timeout` normally fires first.

@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS batches (
@@ -188,6 +188,23 @@ MIGRATIONS: dict[int, list[str]] = {
         "ALTER TABLE turns ADD COLUMN cost_usd REAL",
         "ALTER TABLE messages ADD COLUMN replay_json TEXT",
     ],
+    3: [
+        """CREATE TABLE IF NOT EXISTS approvals (
+            id INTEGER PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES runs(id),
+            turn_idx INTEGER,
+            tool TEXT,
+            summary TEXT,
+            policy TEXT,
+            allowed INTEGER,
+            sandbox TEXT,             -- read-only | workspace-write | off
+            source TEXT,              -- policy | safe-command | approver | session | no-sandbox | hook
+            answer TEXT,              -- the human's answer when asked
+            reason TEXT,
+            created_at REAL NOT NULL
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_approvals_run ON approvals(run_id)",
+    ],
 }
 
 
@@ -346,6 +363,12 @@ class Store:
             "skill_invocations",
             {"run_id": run_id, "turn_idx": turn_idx, "skill": skill, "path": path, "via": via},
         )
+
+    def add_approval(self, run_id: str, turn_idx: int | None, **fields: Any) -> int:
+        return self._insert("approvals", {"run_id": run_id, "turn_idx": turn_idx, **fields})
+
+    def approvals(self, run_id: str) -> list[sqlite3.Row]:
+        return self.q("SELECT * FROM approvals WHERE run_id = ? ORDER BY id", run_id)
 
     def add_compaction(self, run_id: str, turn_idx: int, **fields: Any) -> int:
         return self._insert("compactions", {"run_id": run_id, "turn_idx": turn_idx, **fields})

@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from argus.approval import Approver, Decision, FixedApprover, Gate, looks_denied
 from argus.compact import HEAD, SUMMARY_PREFIX, Compaction, Compactor
 from argus.config import Config, ConfigError
 from argus.detect import (
@@ -35,6 +36,9 @@ from argus.prompt import PromptParts, base_prompt
 from argus.protocols import Parsed, Protocol, ToolCall, make_protocol
 from argus.providers import Provider, provider_from_config, strip_replay
 from argus.providers.base import Completion, ContextOverflow, Delta, LLMError
+from argus.sandbox import OFF, WORKSPACE_WRITE, Backend, NoSandbox, SandboxError
+from argus.sandbox import Spec as SandboxSpec
+from argus.sandbox import choose as choose_sandbox
 from argus.skills import (
     Skill,
     SkillTool,
@@ -66,6 +70,7 @@ class Reporter:
     def tool_start(self, turn: int, call: ToolCall) -> None: ...
     def tool_end(self, turn: int, call: ToolCall, result: ToolResult, ms: float) -> None: ...
     def failure(self, turn: int | None, tag: str, detail: str) -> None: ...
+    def approval(self, turn: int, call: ToolCall, decision: Decision) -> None: ...
     def note(self, text: str) -> None: ...
     def run_end(self, result: RunResult) -> None: ...
 
@@ -116,6 +121,7 @@ class Agent:
         llm: Provider | None = None,
         store: Store | None = None,
         reporter: Reporter | None = None,
+        approver: Approver | None = None,
     ):
         self.cfg = cfg
         self.executor = executor or make_executor(cfg.executor, cfg.tools.capture_bytes)
@@ -124,6 +130,7 @@ class Agent:
         self.reporter = reporter or Reporter()
         self.notes: list[str] = []  # decisions made while setting up, logged with each run
         self.check_protocol()
+        self.gate = self.make_gate(approver)
         self._pricing: dict[str, float] | None = None
         self.tools: dict[str, Tool] = build_tools(cfg.tools)
         self.agents_md: list[tuple[str, str]] = []
@@ -154,6 +161,43 @@ class Agent:
             f"protocol {a.protocol} is not available on {self.llm.describe()}; using {fallback}"
         )
         a.protocol = fallback
+
+    def make_gate(self, approver: Approver | None) -> Gate:
+        """Approval policy plus the sandbox backend that enforces it for commands."""
+        a, sb = self.cfg.agent, self.cfg.sandbox
+        if approver is None:
+            approver = FixedApprover("yes" if a.headless_approval == "allow" else "no")
+        backend: Backend = NoSandbox()
+        if self.executor.can_sandbox and a.approval != "full":
+            try:
+                backend = choose_sandbox(sb.backend)
+            except SandboxError as e:
+                raise ConfigError(str(e)) from None
+            self.executor.sandbox_backend = backend  # type: ignore[attr-defined]
+            for limit in backend.limits(self.sandbox_spec(WORKSPACE_WRITE)):
+                self.notes.append(limit)
+        gate = Gate(
+            a.approval,
+            backend,
+            approver,
+            can_sandbox=self.executor.can_sandbox,
+            required=sb.required,
+        )
+        if a.approval != "full" and not gate.sandboxed:
+            where = "on this machine" if self.executor.can_sandbox else "over SSH"
+            self.notes.append(
+                f"no command sandbox {where}: "
+                + (
+                    "commands run unsandboxed"
+                    if a.approval == "auto" and not sb.required
+                    else "commands need approval"
+                )
+            )
+        return gate
+
+    def sandbox_spec(self, mode: str) -> SandboxSpec:
+        sb = self.cfg.sandbox
+        return SandboxSpec(mode, self.executor.workdir, sb.network, list(sb.writable))
 
     def pricing(self) -> dict[str, float]:
         """USD per 1M tokens: the profile/config figures, else what the provider publishes."""
@@ -317,13 +361,18 @@ class _Run:
             if self.cfg.checkpoint.enabled:
                 self.start_checkpoints()
             applied = getattr(self.cfg, "profile_applied", None)
-            if self.cfg.model.profile or a.notes:
-                self.store.add_event(
-                    self.id,
-                    None,
-                    "profile",
-                    {"profile": self.cfg.model.profile, "applied": applied, "notes": a.notes},
-                )
+            self.store.add_event(
+                self.id,
+                None,
+                "setup",
+                {
+                    "profile": self.cfg.model.profile,
+                    "applied": applied,
+                    "approval": self.cfg.agent.approval,
+                    "sandbox": a.gate.backend.name if a.gate.sandboxed else "none",
+                    "notes": a.notes,
+                },
+            )
             for note in a.notes:
                 self.rep.note(note)
             self.store.add_event(
@@ -660,9 +709,24 @@ class _Run:
                         turn, "malformed_call", f"salvaged {call.name} call from unparsed text"
                     )
                 tool = self.agent.tools[call.name]
+                decision = self.approve(turn, call, tool)
+                if not decision.allow:
+                    msg = f"not allowed: {decision.reason}"
+                    res, ms = ToolResult(f"Error: {msg}", ok=False, error=msg), 0.0
+                    self.rep.tool_end(turn, call, res, ms)
+                    self.result.tool_calls += 1
+                    self.add(self.protocol.result_message(call, res.text), turn)
+                    self.store.add_tool_call(
+                        self.id, turn, i, call_id=call.id, name=call.name, args_json=call.args,
+                        raw_args=call.raw, ok=0, error=msg, result=res.text,
+                        result_chars=len(res.text), truncated=0, duration_ms=0.0,
+                    )  # fmt: skip
+                    continue
                 self.turn_mutated |= tool.mutating
                 pre = self.pre_checkpoint(turn, i, call) if tool.mutating else None
-                res, ms = self.execute_tool(call)
+                res, ms = self.execute_tool(call, decision.sandbox)
+                if call.name == "bash" and decision.sandbox != OFF:
+                    res, ms = self.maybe_escalate(turn, call, decision, res, ms)
                 changes = self.post_check(turn, call, res, pre) if pre else None
                 self.log_skill_use(turn, call, res)
                 verdict = self.loops.observe(
@@ -916,8 +980,50 @@ class _Run:
         except Exception as e:
             self.store.add_event(self.id, self.turn, "checkpoint_error", str(e))
 
-    def execute_tool(self, call: ToolCall) -> tuple[ToolResult, float]:
+    def approve(self, turn: int, call: ToolCall, tool: Tool) -> Decision:
+        """Ask the approval gate; log decisions worth knowing about."""
+        path = call.args.get("path") if isinstance(call.args.get("path"), str) else None
+        inside = path is None or self.agent.executor.inside_workdir(path)
+        d = self.agent.gate.decide(call.name, call.args, tool.mutating, inside)
+        if tool.mutating or not d.allow or d.asked:
+            self.log_decision(turn, call, d)
+        return d
+
+    def log_decision(self, turn: int, call: ToolCall, d: Decision) -> None:
+        summary = call.args.get("cmd") or call.args.get("path") or ""
+        self.store.add_approval(
+            self.id, turn, tool=call.name, summary=str(summary)[:500],
+            policy=self.cfg.agent.approval, allowed=int(d.allow), sandbox=d.sandbox,
+            source=d.source, answer=d.answer or None, reason=d.reason or None,
+        )  # fmt: skip
+        self.rep.approval(turn, call, d)
+
+    def maybe_escalate(
+        self, turn: int, call: ToolCall, d: Decision, res: ToolResult, ms: float
+    ) -> tuple[ToolResult, float]:
+        """A sandboxed command that failed like a sandbox denial may re-run unsandboxed."""
+        code = res.meta.get("exit_code")
+        if code in (0, None) or not looks_denied(res.text):
+            return res, ms
+        esc = self.agent.gate.escalate(call.args.get("cmd", ""))
+        if esc is not None:
+            self.log_decision(turn, call, esc)
+        if esc is not None and esc.allow:
+            again, ms2 = self.execute_tool(call, OFF)
+            again.text += "\n[argus: re-ran without the sandbox after approval]"
+            return again, ms + ms2
+        sb = self.cfg.sandbox
+        where = "the workspace and /tmp" if d.sandbox == WORKSPACE_WRITE else "nowhere"
+        net = "on" if sb.network and d.sandbox == WORKSPACE_WRITE else "off"
+        res.text += (
+            f"\n[argus: this ran in a {d.sandbox} sandbox (writes allowed in {where}, network "
+            f"{net}) and seems to have been blocked by it; running it unsandboxed was not approved]"
+        )
+        return res, ms
+
+    def execute_tool(self, call: ToolCall, sandbox: str = OFF) -> tuple[ToolResult, float]:
         tool = self.agent.tools[call.name]
+        self.tctx.sandbox = self.agent.sandbox_spec(sandbox) if sandbox != OFF else None
         t0 = time.perf_counter()
         try:
             res = tool.run(self.tctx, call.args)
@@ -926,6 +1032,8 @@ class _Run:
         except Exception as e:
             self.store.add_event(self.id, self.turn, "tool_exception", traceback.format_exc())
             res = ToolResult(f"Error: {type(e).__name__}: {e}", ok=False, error=f"internal: {e}")
+        finally:
+            self.tctx.sandbox = None
         return res, (time.perf_counter() - t0) * 1000
 
 

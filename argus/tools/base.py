@@ -58,6 +58,7 @@ class ToolContext:
     tracker: FileTracker = field(default_factory=FileTracker)
     # Side channel for things the agent should log (e.g. skill invocations).
     events: list[dict[str, Any]] = field(default_factory=list)
+    sandbox: Any = None  # argus.sandbox.Spec for the call being run (bash), or None
 
 
 class Tool:

@@ -53,6 +53,20 @@ max_malformed = 3          # consecutive turns without a valid call before abort
 repetition_window = 400    # chars checked for degenerate repetition, 0 = off
 overrun_turns = 2          # tool turns after a completion claim before tagging `overrun`
 reasoning_retry = true
+# Approval policy (as in Codex):
+#   read-only  no edits; commands run in a read-only sandbox without network
+#   ask        confirm every edit and command (known read-only commands excepted)
+#   auto       edits inside the workspace and commands in the workspace-write
+#              sandbox run freely; anything else is asked about
+#   full       no sandbox, no questions
+approval = "auto"
+headless_approval = "deny"   # answer when nobody can be asked (argus run without a TTY)
+
+[sandbox]
+backend = "auto"           # auto | bwrap | landlock | none (commands of the local executor)
+network = true             # network inside the workspace-write sandbox
+writable = []              # extra writable paths, e.g. ["~/.cache/pip"]
+required = false           # refuse to run commands when no sandbox works here
 
 [tools]
 enabled = ["read", "edit", "bash", "glob", "grep"]   # `skill` is added when skills exist

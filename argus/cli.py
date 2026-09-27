@@ -24,6 +24,8 @@ def _config(args: argparse.Namespace) -> Config:
     spec = getattr(args, "model", None)
     if spec:
         overrides[:0] = model_overrides(spec)  # explicit -o still wins
+    if getattr(args, "approval", None):
+        overrides.insert(0, f"agent.approval={json.dumps(args.approval)}")
     if getattr(args, "record", None):
         overrides.append(f"model.record_dir={json.dumps(args.record)}")
     cfg = load_config(getattr(args, "config", None), overrides)
@@ -86,7 +88,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
     cfg = _config(args)
     reporter = ConsoleReporter(verbose=args.verbose) if not args.quiet else None
-    agent = Agent(cfg, reporter=reporter)
+    agent = Agent(cfg, reporter=reporter, approver=_approver(args, cfg))
     try:
         result = agent.run(task)
     finally:
@@ -111,6 +113,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     elif result.final:
         print(result.final)
     return 0 if result.status == "completed" else 1
+
+
+def _approver(args: argparse.Namespace, cfg: Config):
+    """Ask on the terminal when someone is there; otherwise agent.headless_approval decides."""
+    from argus.approval import FixedApprover, TTYApprover
+
+    if getattr(args, "yes", False):
+        return FixedApprover("yes")
+    if cfg.agent.approval in ("ask", "auto") and sys.stdin.isatty() and sys.stderr.isatty():
+        return TTYApprover()
+    return None
 
 
 def cmd_runs(args: argparse.Namespace) -> int:
@@ -588,6 +601,12 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("-q", "--quiet", action="store_true", help="no progress output")
     r.add_argument("--json", action="store_true", help="print a JSON result on stdout")
     r.add_argument("--record", metavar="DIR", help="save every model API exchange as a fixture")
+    r.add_argument(
+        "--approval",
+        choices=["read-only", "ask", "auto", "full"],
+        help="approval policy (default: agent.approval, normally auto)",
+    )
+    r.add_argument("-y", "--yes", action="store_true", help="approve everything argus would ask")
     r.set_defaults(fn=cmd_run)
 
     ls = sub.add_parser("runs", help="list recent runs")

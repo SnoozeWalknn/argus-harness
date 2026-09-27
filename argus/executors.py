@@ -17,7 +17,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import IO
+from typing import IO, Any
 
 DEFAULT_ENV = {
     "PAGER": "cat",
@@ -110,6 +110,8 @@ def _run_process(
     stdin: bytes | None,
     merge_stderr: bool,
     capture_bytes: int,
+    preexec_fn: Any = None,
+    pass_fds: tuple[int, ...] = (),
 ) -> tuple[_Sink, _Sink | None, int | None, bool, float]:
     t0 = time.perf_counter()
     proc = subprocess.Popen(
@@ -120,6 +122,8 @@ def _run_process(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
         start_new_session=True,  # own process group, so a timeout kills children too
+        preexec_fn=preexec_fn,
+        pass_fds=pass_fds,
     )
     out = _Sink(capture_bytes, capture_bytes)
     err = None if merge_stderr else _Sink(capture_bytes, capture_bytes)
@@ -169,6 +173,7 @@ def _kill_group(proc: subprocess.Popen) -> None:
 
 class Executor(ABC):
     kind = "abstract"
+    can_sandbox = False
 
     def __init__(
         self,
@@ -220,8 +225,13 @@ class Executor(ABC):
         merge_stderr: bool = True,
         cwd: str | None = None,
         capture_bytes: int | None = None,
+        sandbox: Any = None,
     ) -> CmdResult:
-        """Run ``cmd`` with the configured shell in ``cwd`` (default: workdir)."""
+        """Run ``cmd`` with the configured shell in ``cwd`` (default: workdir).
+
+        ``sandbox`` is a :class:`argus.sandbox.Spec`; executors that cannot sandbox
+        refuse it (argus only passes one when the executor supports it).
+        """
 
     def has_command(self, name: str) -> bool:
         if name not in self._commands:
@@ -274,9 +284,11 @@ class Executor(ABC):
 
 class LocalExecutor(Executor):
     kind = "local"
+    can_sandbox = True
 
     def __init__(self, workdir: str | None = None, **kw):
         super().__init__(os.path.abspath(os.path.expanduser(workdir or os.getcwd())), **kw)
+        self.sandbox_backend: Any = None  # argus.sandbox.Backend, set by the agent
 
     def run(
         self,
@@ -287,17 +299,29 @@ class LocalExecutor(Executor):
         merge_stderr: bool = True,
         cwd: str | None = None,
         capture_bytes: int | None = None,
+        sandbox: Any = None,
     ) -> CmdResult:
         env = {**os.environ, **self.env}
-        out, err, code, timed_out, ms = _run_process(
-            [self.shell, "-c", cmd],
-            cwd=self.resolve(cwd) if cwd else self.workdir,
-            env=env,
-            timeout=timeout,
-            stdin=stdin,
-            merge_stderr=merge_stderr,
-            capture_bytes=capture_bytes or self.capture_bytes,
-        )
+        argv = [self.shell, "-c", cmd]
+        wrapped = None
+        if sandbox is not None and sandbox.mode != "off" and self.sandbox_backend is not None:
+            wrapped = self.sandbox_backend.wrap(argv, sandbox)
+            argv = wrapped.argv
+        try:
+            out, err, code, timed_out, ms = _run_process(
+                argv,
+                cwd=self.resolve(cwd) if cwd else self.workdir,
+                env=env,
+                timeout=timeout,
+                stdin=stdin,
+                merge_stderr=merge_stderr,
+                capture_bytes=capture_bytes or self.capture_bytes,
+                preexec_fn=wrapped.preexec_fn if wrapped else None,
+                pass_fds=wrapped.pass_fds if wrapped else (),
+            )
+        finally:
+            if wrapped and wrapped.cleanup:
+                wrapped.cleanup()
         return CmdResult(
             exit_code=code,
             output=out.text(),
