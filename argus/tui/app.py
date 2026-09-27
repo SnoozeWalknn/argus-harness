@@ -296,6 +296,11 @@ class ArgusApp(App):
         self.meter = Meter()
         self.totals = {"prompt": 0, "gen": 0, "cost": 0.0, "ctx": 0}
 
+    @property
+    def main(self) -> Any:
+        """The main screen: widgets are looked up there even while a modal is open."""
+        return self.screen_stack[0] if self.screen_stack else self.screen
+
     # -- layout -----------------------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
@@ -333,8 +338,8 @@ class ArgusApp(App):
             self.register_theme(t)
         self.theme = themes.initial(self.cfg.tui.theme, set(self.available_themes))
         self.theme_changed_signal.subscribe(self, lambda _: self.refresh_status())
-        self.query_one("#meter", Static).border_title = "tokens"
-        self.query_one("#transcript").set_class(not self.show_thinking, "hide-thinking")
+        self.main.query_one("#meter", Static).border_title = "tokens"
+        self.main.query_one("#transcript").set_class(not self.show_thinking, "hide-thinking")
         self.set_interval(1 / 20, self.drain)
         self.set_interval(0.2, self.refresh_meter)
         self.set_interval(2.0, self.refresh_jobs)
@@ -343,7 +348,7 @@ class ArgusApp(App):
             self.load_session(self.session_id)
         self.refresh_status()
         self.refresh_meter()
-        self.query_one("#prompt", Input).focus()
+        self.main.query_one("#prompt", Input).focus()
 
     def build_agent(self) -> Agent:
         cfg = copy.deepcopy(self.cfg)
@@ -374,9 +379,9 @@ class ArgusApp(App):
         text.append(f"· {provider} ")
         text.append(f" {mode} ", style="bold reverse" if self.mode == "plan" else "bold")
         text.append(f" · {policy} · tokens {t['prompt']}→{t['gen']}{cost}{ctx}{state}")
-        self.query_one("#status", Static).update(text)
+        self.main.query_one("#status", Static).update(text)
         sid = self.session_id or "new"
-        self.query_one("#session", Static).update(Text(f"{sid}\n{self.theme}"))
+        self.main.query_one("#session", Static).update(Text(f"{sid}\n{self.theme}"))
 
     def refresh_meter(self) -> None:
         theme = self.current_theme
@@ -391,7 +396,7 @@ class ArgusApp(App):
         text = Text()
         for i, (line, style) in enumerate(self.meter.lines()):
             text.append(("\n" if i else "") + line, style=styles.get(style, ""))
-        self.query_one("#meter", Static).update(text)
+        self.main.query_one("#meter", Static).update(text)
 
     def refresh_jobs(self) -> None:
         if not self.jobs.jobs:
@@ -403,7 +408,7 @@ class ArgusApp(App):
             f"{j.id} {'●' if j.status() == 'running' else '○'} {first_line(j.cmd, 26)}"
             for j in self._jobs()
         ]
-        self.query_one("#jobs", Static).update(Text("\n".join(lines[-8:]) or "—"))
+        self.main.query_one("#jobs", Static).update(Text("\n".join(lines[-8:]) or "—"))
 
     def _jobs(self) -> list[Any]:
         for j in self.jobs.jobs.values():
@@ -413,7 +418,7 @@ class ArgusApp(App):
     # -- transcript -------------------------------------------------------------------------------------
 
     def add_line(self, text: str | Text, cls: str, markdown: bool = False) -> Static | Markdown:
-        box = self.query_one("#transcript", VerticalScroll)
+        box = self.main.query_one("#transcript", VerticalScroll)
         widget: Static | Markdown
         if markdown:
             widget = Markdown(str(text), classes=cls)
@@ -459,7 +464,7 @@ class ArgusApp(App):
             self.stream[key].update(body)
         else:
             self.stream[key].update(Text(self._indent(agent, text)))
-        self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
+        self.main.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
 
     def on_agent_delta(self, agent: str, kind: str, text: str, tokens: int = 0) -> None:
         self.meter.stream(kind, tokens, agent)
@@ -523,7 +528,7 @@ class ArgusApp(App):
             if f and f not in self.changed:
                 self.changed.append(f)
         if files:
-            self.query_one("#changed", Static).update(Text("\n".join(self.changed[-15:])))
+            self.main.query_one("#changed", Static).update(Text("\n".join(self.changed[-15:])))
         if name in ("bash", "job"):
             self.refresh_jobs()
 
@@ -553,7 +558,7 @@ class ArgusApp(App):
 
         self.todo_items = items
         text = "\n".join(f"{MARKS[i['status']]} {i['content']}" for i in items) or "—"
-        self.query_one("#todo", Static).update(Text(text))
+        self.main.query_one("#todo", Static).update(Text(text))
 
     def on_agent_run_end(self, agent: str, result: RunResult) -> None:
         if agent:
@@ -642,7 +647,7 @@ class ArgusApp(App):
             else:
                 self.action_next_theme()
         elif name == "/clear":
-            self.query_one("#transcript", VerticalScroll).remove_children()
+            self.main.query_one("#transcript", VerticalScroll).remove_children()
         elif name == "/quit":
             self.run_action("quit")
         elif name == "/help":
@@ -700,7 +705,7 @@ class ArgusApp(App):
 
     def action_toggle_thinking(self) -> None:
         self.show_thinking = not self.show_thinking
-        self.query_one("#transcript").set_class(not self.show_thinking, "hide-thinking")
+        self.main.query_one("#transcript").set_class(not self.show_thinking, "hide-thinking")
         self.notify("thinking shown" if self.show_thinking else "thinking hidden")
 
     def rebuild(self, old: Agent | None) -> Agent:
@@ -811,7 +816,7 @@ class ArgusApp(App):
         assert self.agent is not None
         store = self.agent.store
         self.session_id = session_id
-        box = self.query_one("#transcript", VerticalScroll)
+        box = self.main.query_one("#transcript", VerticalScroll)
         box.remove_children()
         for run in store.session_runs(session_id):
             for m in store.messages(run["id"]):
@@ -837,12 +842,12 @@ class ArgusApp(App):
         if not self._main_screen() or self.running:
             return
         self.session_id = None
-        self.query_one("#transcript", VerticalScroll).remove_children()
+        self.main.query_one("#transcript", VerticalScroll).remove_children()
         self.totals = {"prompt": 0, "gen": 0, "cost": 0.0, "ctx": 0}
         self.meter = Meter(window=self.meter.window)
         self.changed, self.todo_items = [], []
-        self.query_one("#todo", Static).update("—")
-        self.query_one("#changed", Static).update("—")
+        self.main.query_one("#todo", Static).update("—")
+        self.main.query_one("#changed", Static).update("—")
         self.refresh_status()
 
     def action_diff(self) -> None:

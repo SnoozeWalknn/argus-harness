@@ -97,6 +97,7 @@ def test_constrained_parse_strips_think_block():
     p = proto.parse(c, 0)
     assert p.calls[0].name == "read" and p.calls[0].args == {"path": "a"}
     assert p.assistant["content"] == '{"tool":"read","args":{"path":"a"}}'
+    assert p.content == ""  # no thought: nothing to show besides the call itself
     p = proto.parse(Completion(content='{"tool":"done","args":{"summary":"fin"}}'), 1)
     assert p.final == "fin" and not p.calls
     p = proto.parse(Completion(content='{"tool":"read","args":{"path":1}}'), 2)

@@ -323,3 +323,35 @@ def test_real_pylsp(workspace):
         assert any("undefined name 'c'" in x.message for x in report.errors(warnings=True))
     finally:
         d.close()
+
+
+def test_files_read_earlier_in_the_session_can_be_edited(make_agent, workspace):
+    steps = [
+        call("read", path="calc.py"),
+        final("add subtracts"),
+        call("edit", path="calc.py", old="return a - b", new="return a + b"),  # no re-read
+        final("fixed"),
+    ]
+    agent, _ = make_agent(steps)
+    first = agent.run("what is wrong with add?")
+    sid = agent.store.run(first.run_id)["session_id"]
+    second = agent.run("fix it", session=sid)
+    assert second.status == "completed", second.failures
+    edit = agent.store.tool_calls(second.run_id)[0]
+    assert edit["ok"], edit["result"]
+    assert "return a + b" in (workspace / "calc.py").read_text()
+
+
+def test_a_file_changed_since_it_was_read_is_flagged(make_agent, workspace):
+    steps = [
+        call("read", path="calc.py"),
+        final("seen"),
+        call("edit", path="calc.py", old="return max(a, b)", new="return b * a"),
+        final("done"),
+    ]
+    agent, _ = make_agent(steps)
+    first = agent.run("look")
+    (workspace / "calc.py").write_text((workspace / "calc.py").read_text() + "\n# touched\n")
+    second = agent.run("swap", session=agent.store.run(first.run_id)["session_id"])
+    edit = agent.store.tool_calls(second.run_id)[0]
+    assert not edit["ok"] and "the file changed since you last read it" in edit["result"]

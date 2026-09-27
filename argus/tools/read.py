@@ -3,7 +3,7 @@ from __future__ import annotations
 import difflib
 import posixpath
 
-from argus.tools.base import Tool, ToolContext, ToolError, ToolResult, obj
+from argus.tools.base import Tool, ToolContext, ToolError, ToolResult, digest, obj
 
 MAX_READ_BYTES = 10_000_000
 
@@ -88,4 +88,6 @@ class ReadTool(Tool):
         if truncated:
             more = f"; offset={end + 1} for more" if end < total else ""
             body += f"\n[lines {offset}-{end} of {total}{more}]"
-        return ToolResult(body, truncated=truncated, meta={"path": path, "lines": total})
+        return ToolResult(
+            body, truncated=truncated, meta={"path": path, "lines": total, "sha1": digest(data)}
+        )

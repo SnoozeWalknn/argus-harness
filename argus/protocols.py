@@ -276,8 +276,8 @@ class ConstrainedProtocol(Protocol):
         if not isinstance(action, dict) or not isinstance(action.get("tool"), str):
             p.problems.append('reply must be a JSON object with "tool" and "args"')
             return p
-        if isinstance(action.get("thought"), str):
-            p.content = action["thought"]
+        # the visible text is the action's thought; the call itself is shown as a call
+        p.content = action["thought"] if isinstance(action.get("thought"), str) else ""
         args = action.get("args", {})
         if action["tool"] == "done":
             summary = args.get("summary") if isinstance(args, dict) else None

@@ -638,6 +638,7 @@ class _Run:
         if switched or old_system != self.system_prompt:
             self.drop_replay("session continued with another model or system prompt")
         self.projection_from = 0  # none of this history has been counted by a server yet
+        self.remember_files(session_id)
         self.store.add_event(
             self.id,
             None,
@@ -654,6 +655,19 @@ class _Run:
                 },
             },
         )
+
+    def remember_files(self, session_id: str) -> None:
+        """The files earlier runs of the session read or wrote count as read, with the
+        content hash the model last saw, so an edit need not re-read them; one that
+        changed since is flagged stale by the edit, as within a run."""
+        tracker = self.tctx.tracker
+        for run in self.store.session_runs(session_id):
+            for tc in self.store.tool_calls(run["id"]):
+                if tc["name"] not in ("read", *FILE_WRITERS) or not tc["ok"]:
+                    continue
+                meta = json.loads(tc["meta_json"] or "{}")
+                if meta.get("path"):
+                    tracker.mark_digest(meta["path"], meta.get("sha1") or "stale")
 
     def save_session(self) -> None:
         if not self.session_id or not getattr(self, "system_prompt", ""):

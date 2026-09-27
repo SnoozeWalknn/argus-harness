@@ -369,3 +369,26 @@ def test_jobs_survive_a_model_switch(mock, workspace, db_path, monkeypatch):
 
     job = asyncio.run(go())
     assert job.status() == "killed"  # quitting the app stops its jobs
+
+
+def test_updates_while_a_modal_is_open(mock, workspace, db_path):
+    server = mock([])
+    app = ArgusApp(factory(server, workspace, db_path))
+
+    async def go():
+        async with app.run_test(size=(120, 40)) as pilot:
+            app.query_one("#prompt").value = "/help"
+            await pilot.press("enter")
+            await until(pilot, lambda: len(app.screen_stack) == 2)
+            # agent events and timers keep updating the main screen underneath
+            app.on_agent_note("", "still here")
+            app.on_agent_turn_start("", 0)
+            app.on_agent_delta("", "reasoning", "thinking under a modal", 3)
+            app.refresh_meter()
+            app.refresh_status()
+            await pilot.pause(0.5)
+            await pilot.press("escape")
+            assert any("still here" in t for t in texts(app, ".note"))
+            assert any("thinking under a modal" in t for t in texts(app, ".reasoning"))
+
+    run(go())

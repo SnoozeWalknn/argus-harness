@@ -36,6 +36,10 @@ class FileTracker:
     def mark(self, path: str, data: bytes) -> None:
         self._seen[path] = digest(data)
 
+    def mark_digest(self, path: str, sha1: str) -> None:
+        """Remember a file as seen with this content hash (e.g. from an earlier run)."""
+        self._seen[path] = sha1
+
     def seen(self, path: str) -> bool:
         return path in self._seen
 
