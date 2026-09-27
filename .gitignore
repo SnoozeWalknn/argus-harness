@@ -9,3 +9,5 @@ dist/
 *.db
 *.db-wal
 *.db-shm
+# rendered videos: build them locally (promo/README.md), never commit them
+promo/*.mp4

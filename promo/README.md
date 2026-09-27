@@ -3,10 +3,25 @@
 Two films, built with [Remotion](https://www.remotion.dev/), 1920×1080, 30 fps,
 H.264, no audio:
 
-- [`argus-launch.mp4`](argus-launch.mp4): **the 90-second launch film** of the
-  model-agnostic agent, every feature in eleven chapters (below).
-- [`argus-promo.mp4`](argus-promo.mp4): the original 60-second promo of the
-  local-model harness.
+- `argus-launch.mp4`: **the 90-second launch film** of the model-agnostic
+  agent, every feature in eleven chapters (below).
+- `argus-promo.mp4`: the original 60-second promo of the local-model harness.
+
+**The MP4s are not in git** (`promo/*.mp4` is ignored): render them locally.
+
+```sh
+cd promo
+npm install                 # Remotion, fonts, the film-grain tile
+npm run render:launch       # → promo/argus-launch.mp4, about 13 min on 4 cores
+npm run render              # → promo/argus-promo.mp4
+```
+
+Remotion downloads its own headless Chrome the first time; if that download is
+blocked, point it at an installed Chromium or chrome-headless-shell with
+`REMOTION_BROWSER_EXECUTABLE=/path/to/chrome npm run render:launch`. The launch
+film reads its UI captures from `public/launch/` and its numbers from
+`src/launch/data.json`, both in git; re-capture them only after changing argus
+(below).
 
 ## The launch film (90 s)
 
