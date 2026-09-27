@@ -211,3 +211,66 @@ def test_errors_count_and_detect(mock):
         make_provider("gemini", base_url=f"{s.root}/v1beta", model="m", require_key=False).chat(
             {"messages": [{"role": "user", "content": "x"}]}
         )
+
+
+# -- safety settings -----------------------------------------------------------------------------------
+
+PORT_SCANNER = {**final("the port scanner is ready"), "harm": "dangerous_content"}
+
+
+def test_safety_setting_on_the_wire():
+    body = {"messages": [{"role": "user", "content": "x"}]}
+    wire = gemini(options=ProviderOptions(safety="off")).wire_body(body)
+    assert wire["safetySettings"] == [
+        {"category": f"HARM_CATEGORY_{c}", "threshold": "OFF"}
+        for c in ("HARASSMENT", "HATE_SPEECH", "SEXUALLY_EXPLICIT", "DANGEROUS_CONTENT")
+    ]
+    assert "safetySettings" not in gemini().wire_body(body)  # unset: the API's defaults
+    high = gemini(options=ProviderOptions(safety="block_only_high")).wire_body(body)
+    assert {s["threshold"] for s in high["safetySettings"]} == {"BLOCK_ONLY_HIGH"}
+
+
+def test_the_filter_blocks_until_safety_is_off(make_agent, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", KEY)
+    task = "write a port scanner for my own network"
+    blocked, _ = run_agent(make_agent, [PORT_SCANNER], "gemini-2.5-pro")
+    r = blocked.run(task)
+    assert r.status == "refused"
+    assert ("refusal", "SAFETY (dangerous content)") in r.failures
+    notes = [e["data_json"] for e in blocked.store.events(r.run_id, "provider_note")]
+    assert any("model.safety" in n for n in notes)
+
+    still, _ = run_agent(
+        make_agent, [PORT_SCANNER], "gemini-2.5-pro", 'model.safety="block_only_high"'
+    )
+    assert still.run(task).status == "refused"
+
+    off, server = run_agent(make_agent, [PORT_SCANNER], "gemini-2.5-pro", 'model.safety="off"')
+    r = off.run(task)
+    assert r.status == "completed" and r.final == "the port scanner is ready"
+    assert server.errors == []
+    assert {s["threshold"] for s in server.requests[0]["safetySettings"]} == {"OFF"}
+
+
+def test_mock_checks_safety_settings_like_the_api():
+    from argus.mock import gemini as fmt
+
+    base = {"contents": [{"role": "user", "parts": [{"text": "x"}]}]}
+    bad_cat = {**base, "safetySettings": [{"category": "HARM_CATEGORY_X", "threshold": "OFF"}]}
+    assert "safety_settings[0].category" in fmt.validate("gemini-2.5-pro", bad_cat)
+    bad = {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "NONE"}
+    assert "safety_settings[0].threshold" in fmt.validate(
+        "gemini-2.5-pro", {**base, "safetySettings": [bad]}
+    )
+    ok = {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}
+    assert fmt.validate("gemini-2.5-pro", {**base, "safetySettings": [ok]}) is None
+    assert "duplicate" in fmt.validate("gemini-2.5-pro", {**base, "safetySettings": [ok, ok]})
+
+
+def test_safety_config_is_checked_and_noted_elsewhere(make_agent):
+    from argus.config import ConfigError, load_config
+
+    with pytest.raises(ConfigError, match="model.safety must be one of"):
+        load_config(None, ['model.safety="none"'])
+    agent, _ = make_agent([], overrides=['model.safety="off"'])
+    assert any("model.safety only applies to Gemini" in n for n in agent.notes)

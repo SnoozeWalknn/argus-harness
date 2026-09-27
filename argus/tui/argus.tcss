@@ -59,6 +59,11 @@ Screen {
     color: $warning;
 }
 
+.refusal {
+    color: $warning;
+    text-style: bold;
+}
+
 .final {
     margin: 0 0 1 0;
 }

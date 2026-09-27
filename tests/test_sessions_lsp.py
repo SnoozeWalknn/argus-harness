@@ -212,6 +212,40 @@ def test_switch_from_anthropic_to_gemini_3(make_agent, monkeypatch):
     assert call_part["thoughtSignature"] == "context_engineering_is_the_way_to_go"
 
 
+def test_refused_then_continued_on_another_model(make_agent, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-0000000000")
+    claude, _ = make_agent(
+        [call("read", path="calc.py"), {"content": "", "refusal": {"category": "cyber"}}],
+        overrides=['model.provider="anthropic"', 'model.model="claude-sonnet-5"'],
+    )
+    first = claude.run("look at calc.py")
+    assert first.status == "refused"
+    sid = claude.store.run(first.run_id)["session_id"]
+    local, server = make_agent([final("add subtracts")])
+    local.store = claude.store
+    second = local.run("go on", session=sid)
+    assert second.status == "completed" and server.errors == []
+    req = server.requests[0]
+    # the tool work before the refusal carries over; the refused reply does not
+    assert roles(req) == ["system", "user", "assistant", "tool", "user"]
+    assert req["messages"][-1]["content"] == "go on"
+
+
+def test_cli_exit_status_for_a_refusal(tmp_path, workspace, monkeypatch, capsys):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-0000000000")
+    server = MockServer(Script([{"content": "", "refusal": {"category": "cyber"}}])).start()
+    args = ["-m", "anthropic/claude-opus-5", "-o", f"model.base_url={q(server.url)}"]
+    common = ["-w", str(workspace), "--db", str(tmp_path / "a.db"), *args]
+    try:
+        assert main(["run", "x", *common]) == 3
+    finally:
+        server.stop()
+    out, err = capsys.readouterr()
+    assert out.strip() == "The request was declined."  # the reason is the answer
+    assert "the model declined" in err and "argus run --continue" in err
+    assert "refused" in err
+
+
 # -- LSP diagnostics --------------------------------------------------------------------------------
 
 

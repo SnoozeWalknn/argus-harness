@@ -100,7 +100,7 @@ class Reporter:
 @dataclass
 class RunResult:
     run_id: str
-    status: str = "running"  # completed | failed | error | interrupted
+    status: str = "running"  # completed | refused | failed | error | interrupted
     final: str = ""
     turns: int = 0
     tool_calls: int = 0
@@ -163,6 +163,8 @@ class Agent:
         self.notes: list[str] = []  # decisions made while setting up, logged with each run
         self.extra_prompt: list[str] = []  # plan mode, subagent instructions
         self.check_protocol()
+        if cfg.model.safety and self.llm.kind != "gemini":
+            self.notes.append(f"model.safety only applies to Gemini; {self.llm.kind} ignores it")
         if cfg.agent.mode == "plan":
             cfg.agent.approval = stricter(cfg.agent.approval, "read-only")
             self.extra_prompt.append(PLAN_PROMPT)
@@ -471,6 +473,18 @@ class _Run:
         self.result.status = status
         self.result.final = final
 
+    def refused(self, turn: int, c: Completion) -> None:
+        """The model (or the API's filter) declined. That is its answer, not a harness
+        failure: the run ends ``refused`` with the ``refusal`` tag logged, and the session
+        stays open to rephrase or to continue on another model. The refused reply is left
+        out of the session's history (it stays in the log), as Anthropic advises after a
+        refusal, so the next message does not build on it."""
+        reason = c.refusal or "the model declined the request"
+        self.fail(turn, "refusal", reason)
+        mid, _ = self.context.pop()
+        self.store.add_event(self.id, turn, "refusal", {"reason": reason, "left_out": mid})
+        self.finish("refused", reason)  # not the cut-off reply: the reason is the answer
+
     # -- main ----------------------------------------------------------------------------------
 
     def execute(self) -> RunResult:
@@ -684,8 +698,7 @@ class _Run:
             self.rep.turn_end(turn, c, parsed)
 
             if c.finish_reason == "refusal":
-                self.fail(turn, "refusal", c.refusal or "the model declined the request")
-                self.finish("failed", c.content.strip())
+                self.refused(turn, c)
                 return
             if c.finish_reason == "length" and not parsed.calls:
                 self.fail(turn, "token_cap", f"turn hit max_tokens ({self.last_max_tokens})")

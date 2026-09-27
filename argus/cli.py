@@ -14,6 +14,9 @@ from argus.fsstate import summarize
 from argus.store import Store
 from argus.suite import SuiteError
 
+# argus run: 0 completed, 3 the model declined (the session stays open), 1 anything else
+EXIT_CODES = {"completed": 0, "refused": 3}
+
 
 def _config(args: argparse.Namespace, pick: bool = False) -> Config:
     """Config from the layered files, -m/-o and flags. ``pick``: choose a model when none
@@ -141,7 +144,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
     elif result.final:
         print(result.final)
-    return 0 if result.status == "completed" else 1
+    return EXIT_CODES.get(result.status, 1)
 
 
 def _approver(args: argparse.Namespace, cfg: Config):

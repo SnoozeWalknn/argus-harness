@@ -58,6 +58,9 @@ class ModelConfig:
     quirks: list[str] = field(default_factory=list)  # named request adjustments, see profiles
     pricing: dict[str, float] = field(default_factory=dict)  # USD per 1M: input, output, cache_*
     record_dir: str = ""  # save every API exchange here as a fixture (also $ARGUS_RECORD)
+    # Gemini's safety filter, for every adjustable category: "" = the API's defaults |
+    # off | block_none | block_only_high | block_medium_and_above | block_low_and_above
+    safety: str = ""
 
 
 @dataclass
@@ -360,6 +363,12 @@ def validate(cfg: Config) -> Config:
             raise ConfigError(f"{where}.provider must be one of {PROVIDERS}, got {value!r}")
     if cfg.agent.protocol not in PROTOCOLS:
         raise ConfigError(f"agent.protocol must be one of {PROTOCOLS}, got {cfg.agent.protocol!r}")
+    from argus.providers.gemini import SAFETY_THRESHOLDS
+
+    if cfg.model.safety and cfg.model.safety not in SAFETY_THRESHOLDS:
+        raise ConfigError(
+            f"model.safety must be one of {tuple(SAFETY_THRESHOLDS)}, got {cfg.model.safety!r}"
+        )
     from argus.approval import POLICIES
     from argus.sandbox import BACKENDS
 

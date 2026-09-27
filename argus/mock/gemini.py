@@ -8,6 +8,11 @@ scripted steps as ``GenerateContentResponse`` objects or SSE chunks.
 For ``gemini-3*`` models the mock also enforces thought signatures: the first
 function call of every model turn must carry a signature the mock issued (or the
 documented placeholder), as those models require.
+
+A step with ``"harm": "dangerous_content"`` (a harm category, lower case without
+the ``HARM_CATEGORY_`` prefix) stands for a reply the safety filter rates HIGH in
+that category: it is blocked with ``finishReason: SAFETY`` unless the request's
+``safetySettings`` set that category to ``BLOCK_NONE`` or ``OFF``.
 """
 
 from __future__ import annotations
@@ -17,6 +22,21 @@ import json
 from typing import Any
 
 PLACEHOLDER = "context_engineering_is_the_way_to_go"
+HARM_CATEGORIES = (
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "HARM_CATEGORY_CIVIC_INTEGRITY",
+)
+THRESHOLDS = (
+    "HARM_BLOCK_THRESHOLD_UNSPECIFIED",
+    "BLOCK_LOW_AND_ABOVE",
+    "BLOCK_MEDIUM_AND_ABOVE",
+    "BLOCK_ONLY_HIGH",
+    "BLOCK_NONE",
+    "OFF",
+)
 UNSUPPORTED_SCHEMA = ("additionalProperties", "$schema", "const", "$ref", "patternProperties")
 
 
@@ -124,6 +144,23 @@ def validate(model: str, req: dict[str, Any], verify: bool = True) -> str | None
     contents = req.get("contents") or []
     if not contents:
         return "* GenerateContentRequest.contents: contents is not specified"
+    seen: set[str] = set()
+    for i, s in enumerate(req.get("safetySettings") or []):
+        if s.get("category") not in HARM_CATEGORIES:
+            return (
+                f"Invalid value at 'safety_settings[{i}].category' "
+                f"(type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), "
+                f'"{s.get("category")}"'
+            )
+        if s.get("threshold") not in THRESHOLDS:
+            return (
+                f"Invalid value at 'safety_settings[{i}].threshold' "
+                f"(type.googleapis.com/google.ai.generativelanguage.v1beta."
+                f'SafetySetting.HarmBlockThreshold), "{s.get("threshold")}"'
+            )
+        if s["category"] in seen:
+            return f"* GenerateContentRequest.safety_settings: duplicate category {s['category']}"
+        seen.add(s["category"])
     for t in req.get("tools") or []:
         for i, d in enumerate(t.get("functionDeclarations") or []):
             p = _schema_problem(
@@ -165,6 +202,17 @@ def validate(model: str, req: dict[str, Any], verify: bool = True) -> str | None
 
 def error_body(code: int, status: str, message: str) -> dict[str, Any]:
     return {"error": {"code": code, "message": message, "status": status}}
+
+
+def harm_blocked(step: dict[str, Any], req: dict[str, Any]) -> str | None:
+    """The category a scripted ``harm`` step is blocked for under the request's settings."""
+    if not step.get("harm"):
+        return None
+    category = "HARM_CATEGORY_" + str(step["harm"]).upper()
+    for s in req.get("safetySettings") or []:
+        if s.get("category") == category and s.get("threshold") in ("BLOCK_NONE", "OFF"):
+            return None
+    return category  # rated HIGH: every other threshold (and the default) blocks it
 
 
 def finish_reason(step: dict[str, Any], finish: str) -> str:
@@ -234,6 +282,12 @@ def chunks(
         out.append(cand([{"text": "", "thoughtSignature": signature}]))
     last = cand([]) if not out else out.pop()
     last["candidates"][0]["finishReason"] = finish
+    if step.get("harm"):
+        category = "HARM_CATEGORY_" + str(step["harm"]).upper()
+        rating = {"category": category, "probability": "HIGH"}
+        if finish == "SAFETY":
+            rating["blocked"] = True
+        last["candidates"][0]["safetyRatings"] = [rating]
     if not last["candidates"][0]["content"]["parts"]:
         del last["candidates"][0]["content"]
     last["usageMetadata"] = usage_meta
@@ -260,14 +314,15 @@ def merged(chunks_: list[dict[str, Any]]) -> dict[str, Any]:
             else:
                 parts.append(dict(p))
     last = chunks_[-1]
+    candidate = {
+        "content": {"role": "model", "parts": parts},
+        "finishReason": last["candidates"][0].get("finishReason"),
+        "index": 0,
+    }
+    if last["candidates"][0].get("safetyRatings"):
+        candidate["safetyRatings"] = last["candidates"][0]["safetyRatings"]
     return {
-        "candidates": [
-            {
-                "content": {"role": "model", "parts": parts},
-                "finishReason": last["candidates"][0].get("finishReason"),
-                "index": 0,
-            }
-        ],
+        "candidates": [candidate],
         "usageMetadata": last.get("usageMetadata"),
         "modelVersion": last.get("modelVersion"),
         "responseId": last.get("responseId"),

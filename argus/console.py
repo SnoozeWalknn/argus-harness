@@ -121,6 +121,15 @@ class ConsoleReporter(Reporter):
         self._p(f"    {mark} {first_line(result.text)} {self.s.dim(f'({ms:.0f}ms)')}")
 
     def failure(self, turn: int | None, tag: str, detail: str) -> None:
+        if tag == "refusal":
+            self._p(self.s.yellow(f"  ⊘ the model declined: {first_line(detail, 160)}"))
+            self._p(
+                self.s.dim(
+                    "    the session continues: argus run --continue 'rephrased task' "
+                    "(add -m SPEC for another model)"
+                )
+            )
+            return
         self._p(self.s.yellow(f"  ! {tag}: {first_line(detail, 160)}"))
 
     def note(self, text: str) -> None:
@@ -133,7 +142,7 @@ class ConsoleReporter(Reporter):
             self._p(self.s.dim(f"    ✓ approved ({decision.answer})"))
 
     def run_end(self, r: RunResult) -> None:
-        color = self.s.green if r.status == "completed" else self.s.red
+        color = {"completed": self.s.green, "refused": self.s.yellow}.get(r.status, self.s.red)
         tags = f" [{', '.join(r.tags)}]" if r.failures else ""
         cost = f" · ${r.cost_usd:.4f}" if r.cost_usd is not None else ""
         self._p(

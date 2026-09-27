@@ -394,6 +394,16 @@ class ArgusApp(App):
         return path if rel.startswith("..") else rel
 
     def on_agent_failure(self, agent: str, tag: str, detail: str) -> None:
+        if tag == "refusal":
+            self.add_line(
+                self._indent(agent, f"⊘ the model declined: {first_line(detail, 200)}"), "refusal"
+            )
+            if not agent:
+                self.add_line(
+                    "the session continues: rephrase and send, or switch model with ctrl+o",
+                    "note",
+                )
+            return
         self.add_line(self._indent(agent, f"! {tag}: {first_line(detail, 200)}"), "failure")
 
     def on_agent_note(self, agent: str, text: str) -> None:
@@ -414,7 +424,7 @@ class ArgusApp(App):
             return
         if result.cost_usd:
             self.totals["cost"] += result.cost_usd
-        if result.status != "completed":
+        if result.status not in ("completed", "refused"):  # a refusal was shown as it came
             self.add_line(
                 f"run {result.status}" + (f": {result.error}" if result.error else ""), "failure"
             )

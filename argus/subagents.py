@@ -171,10 +171,13 @@ class TaskTool(Tool):
         if not str(args.get("prompt", "")).strip():
             raise ToolError("give the subagent a prompt with everything it needs")
         r = self.parent.spawn(d, args["prompt"], ctx.run_id, ctx.turn)
-        answer = (
-            r.final.strip()
-            or f"(no report; the subagent ended {r.status}: {r.error or ', '.join(r.tags) or 'no answer'})"
-        )
+        if r.status == "refused":
+            answer = f"(the subagent's model declined: {r.final})"
+        else:
+            answer = r.final.strip() or (
+                f"(no report; the subagent ended {r.status}: "
+                f"{r.error or ', '.join(r.tags) or 'no answer'})"
+            )
         stats = (
             f"[subagent {d.name}: {r.status}, {r.turns} turns, {r.tool_calls} tool calls, "
             f"{r.completion_tokens} tokens generated, run {r.run_id}]"

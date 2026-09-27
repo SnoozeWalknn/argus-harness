@@ -329,11 +329,22 @@ def test_compaction_drops_replay(make_agent, workspace, key):
     assert server.errors == []
 
 
-def test_refusal_fails_the_run(make_agent, key):
-    agent, server = claude(make_agent, [{"content": "", "refusal": {"category": "cyber"}}])
-    result = agent.run("something")
-    assert result.status == "failed"
-    assert ("refusal", "The request was declined.") in result.failures
+def test_a_refusal_ends_the_run_and_the_session_goes_on(make_agent, key):
+    steps = [{"content": "Sure, here", "refusal": {"category": "cyber"}}, final("rephrased ok")]
+    agent, server = claude(make_agent, steps)
+    first = agent.run("something")
+    assert (first.status, first.final) == ("refused", "The request was declined.")
+    assert ("refusal", "The request was declined.") in first.failures
+    assert agent.store.events(first.run_id, "refusal")
+    sid = agent.store.run(first.run_id)["session_id"]
+    second = agent.run("something else", session=sid)
+    assert second.status == "completed" and server.errors == []
+    # the refused reply is left out; the two user turns go as one message
+    wire = server.requests[1]["messages"]
+    assert [m["role"] for m in wire] == ["user"]
+    assert [b["text"] for b in wire[0]["content"]] == ["something", "something else"]
+    kinds = [m["role"] for m in agent.store.messages(first.run_id)]
+    assert "assistant" in kinds  # still in the log
 
 
 def test_max_tokens_mid_tool_call_is_malformed(make_agent, key):

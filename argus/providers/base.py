@@ -176,6 +176,7 @@ class ProviderOptions:
     thinking_budget: int = 0  # reasoning token budget, where the API takes one
     cache: bool = True  # prompt caching, where the API needs it requested
     thinking: str = ""  # thinking format: "" = the adapter's default, or e.g. adaptive | budget
+    safety: str = ""  # gemini: safety filter threshold for every category ("" = API default)
     headers: dict[str, str] = field(default_factory=dict)
 
 

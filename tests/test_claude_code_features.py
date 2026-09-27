@@ -119,6 +119,22 @@ def test_explore_subagent(make_agent, workspace):
     assert server.requests[3]["messages"][-1]["content"].startswith("add is defined")
 
 
+def test_a_refused_subagent_reports_it_to_the_parent(make_agent):
+    steps = [
+        call("task", agent="explore", prompt="Look into it"),
+        {"content": "", "finish_reason": "content_filter"},  # the subagent's model declines
+        final("The explorer declined; I read calc.py myself."),
+    ]
+    agent, _ = make_agent(steps, overrides=['agent.subagents="on"'])
+    result = agent.run("look into calc.py")
+    assert result.status == "completed", result.failures
+    tc = agent.store.tool_calls(result.run_id)[0]
+    assert tc["result"].startswith("(the subagent's model declined: ")
+    assert "[subagent explore: refused" in tc["result"]
+    (child,) = agent.store.children(result.run_id)
+    assert child["status"] == "refused"
+
+
 def test_custom_subagent_with_its_own_model(make_agent, workspace):
     write_agent(
         workspace,

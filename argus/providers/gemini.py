@@ -15,6 +15,8 @@ Translation from the canonical request:
 * tool schemas are reduced to the subset the API accepts
 * thinking → ``thinkingConfig`` (``thinkingBudget``, or ``thinkingLevel`` with
   ``ProviderOptions.thinking = "gemini_level"``) with thought summaries included
+* ``model.safety`` → ``safetySettings``: one threshold for each adjustable harm
+  category (``off`` turns the filter off). Unset, the API's defaults apply.
 
 Gemini does not always return function-call ids, so argus assigns them.
 """
@@ -61,6 +63,20 @@ SCHEMA_KEYS = {
     "propertyOrdering",
 }
 REFUSALS = {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"}
+# model.safety → the API's HarmBlockThreshold, applied to each adjustable category
+SAFETY_THRESHOLDS = {
+    "off": "OFF",
+    "block_none": "BLOCK_NONE",
+    "block_only_high": "BLOCK_ONLY_HIGH",
+    "block_medium_and_above": "BLOCK_MEDIUM_AND_ABOVE",
+    "block_low_and_above": "BLOCK_LOW_AND_ABOVE",
+}
+HARM_CATEGORIES = (
+    "HARM_CATEGORY_HARASSMENT",
+    "HARM_CATEGORY_HATE_SPEECH",
+    "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "HARM_CATEGORY_DANGEROUS_CONTENT",
+)
 EFFORT_BUDGET = {"minimal": 512, "low": 1024, "medium": 8192, "high": 24576}
 LOCAL_ID = "gemini_"  # prefix of function-call ids argus assigns when Gemini gives none
 _ids = itertools.count(1)
@@ -172,6 +188,11 @@ class GeminiProvider(Provider):
             gen["thinkingConfig"] = thinking
         if gen:
             out["generationConfig"] = gen
+        if self.opts.safety:
+            threshold = SAFETY_THRESHOLDS[self.opts.safety]
+            out["safetySettings"] = [
+                {"category": c, "threshold": threshold} for c in HARM_CATEGORIES
+            ]
         return out
 
     def _thinking(self, t: dict[str, Any]) -> dict[str, Any] | None:
@@ -300,13 +321,15 @@ class GeminiProvider(Provider):
             c.model = data["modelVersion"]
         feedback = data.get("promptFeedback") or {}
         if feedback.get("blockReason"):
-            c.refusal = f"prompt blocked: {feedback['blockReason']}"
+            c.refusal = f"prompt blocked: {feedback['blockReason']}{blocked(feedback)}"
             c.stop_raw = feedback["blockReason"]
         for cand in (data.get("candidates") or [])[:1]:
             if cand.get("finishReason"):
                 c.stop_raw = cand["finishReason"]
                 if cand.get("finishMessage"):
                     c.notes.append(f"{cand['finishReason']}: {cand['finishMessage']}")
+                if cand["finishReason"] in REFUSALS and not c.refusal:
+                    c.refusal = cand["finishReason"] + blocked(cand)
             events: list[tuple[str, str]] = []
             for part in (cand.get("content") or {}).get("parts") or []:
                 _merge_part(parts, part)
@@ -339,6 +362,11 @@ class GeminiProvider(Provider):
         elif stop in REFUSALS or c.refusal:
             c.finish_reason = "refusal"
             c.refusal = c.refusal or stop
+            if c.stop_raw == "SAFETY" and self.opts.safety != "off":  # the adjustable filter
+                c.notes.append(
+                    "Gemini's safety filter blocked this reply; "
+                    'model.safety = "off" turns the filter off'
+                )
         elif stop == "MALFORMED_FUNCTION_CALL":
             c.finish_reason = "stop"
             c.malformed = "the model produced a malformed function call"
@@ -357,6 +385,7 @@ class GeminiProvider(Provider):
         wire = self.wire_body({**body, "max_tokens": 0})
         wire.pop("generationConfig", None)
         wire.pop("toolConfig", None)
+        wire.pop("safetySettings", None)
         payload = {"generateContentRequest": {"model": f"models/{model}", **wire}}
         data = self.post_json(self._url(model, "countTokens"), payload)
         return int(data.get("totalTokens") or 0)
@@ -376,6 +405,16 @@ class GeminiProvider(Provider):
 
     def health(self) -> bool:
         return bool(self.detect().models)
+
+
+def blocked(obj: dict[str, Any]) -> str:
+    """The categories a candidate or prompt was blocked for, as ' (dangerous content)'."""
+    cats = [
+        r.get("category", "").removeprefix("HARM_CATEGORY_").replace("_", " ").lower()
+        for r in obj.get("safetyRatings") or []
+        if r.get("blocked")
+    ]
+    return f" ({', '.join(cats)})" if cats else ""
 
 
 def wire_model(url: str) -> str:

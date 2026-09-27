@@ -71,7 +71,7 @@ and `-o` overrides such as `-o agent.protocol='"grammar"' -o model.temperature=0
 | command | what it does |
 |---|---|
 | `argus` / `argus tui` | the terminal UI (when Textual is installed and stdout is a terminal) |
-| `argus run TASK` | run one task (`-f FILE`, `-` for stdin, `--json` for a machine-readable result, `-m SPEC`, `--plan`, `--approval P`, `-y`, `--continue`, `--session S`, `--record DIR`) |
+| `argus run TASK` | run one task (`-f FILE`, `-` for stdin, `--json` for a machine-readable result, `-m SPEC`, `--plan`, `--approval P`, `-y`, `--continue`, `--session S`, `--record DIR`); exits 0 when completed, 3 when the model declined, 1 otherwise |
 | `argus sessions` / `argus resume [SESSION] TASK` | list sessions / continue one (possibly on another model) |
 | `argus runs` / `argus show RUN` | list runs / full transcript with reasoning, tool calls, tokens, timings, cost |
 | `argus failures [--batch B] [--tag T]` | failure-tag summary and recent examples |
@@ -105,6 +105,20 @@ environment: the provider's usual variable, or the one named by
 `model.api_key_env`. Thinking is one knob across providers
 (`model.thinking`, `model.effort`, `model.thinking_budget`), translated to
 each API's format.
+
+Gemini's safety filter is set with `model.safety`: `"off"` turns it off,
+`"block_none"` keeps the ratings but never blocks, and `"block_only_high"`,
+`"block_medium_and_above"`, `"block_low_and_above"` are stricter. It applies
+to every adjustable category (harassment, hate speech, sexually explicit,
+dangerous content); unset, the API's defaults apply. Other providers have no
+such setting.
+
+When a model declines (or a provider's filter blocks the reply), the run ends
+with status `refused` rather than `failed` (`argus run` exits 3), the reason
+is shown, and the `refusal` tag is logged. The session stays open: send a
+rephrased message, or carry on with another model (`-m`, ctrl+o in the TUI).
+The refused reply is left out of the session's history, so the next message
+doesn't build on it; the request and any work before it carry over.
 
 ## Model profiles and tuning
 
@@ -255,7 +269,9 @@ SELECT idx, prompt_tokens, cached_tokens, completion_tokens, reasoning_tokens, g
 | `token_cap` | `max_tokens` cut-off, runaway reasoning, reasoning budget, context overflow, run token budget |
 
 Also `max_turns`, `timeout`, `server_error`, `fs_violation`, `interrupted`,
-`refusal` (the model or API declined) and `blocked` (a hook blocked the prompt).
+`blocked` (a hook blocked the prompt) and `refusal` (the model or the
+provider's filter declined; the run ends `refused`, not `failed`, and its
+session can go on).
 With streaming on, generation is aborted mid-stream when reasoning exceeds
 `agent.max_reasoning_tokens` or degenerates into repetition; the turn is
 retried once (with thinking disabled if the reasoning ran away).

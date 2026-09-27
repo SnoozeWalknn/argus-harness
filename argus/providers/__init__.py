@@ -179,6 +179,7 @@ def provider_from_config(m: Any, recorder: Recorder | None = None, **kw: Any) ->
         thinking_budget=m.thinking_budget,
         cache=m.cache,
         thinking=m.thinking,
+        safety=m.safety,
     )
     if recorder is None and m.record_dir:
         from argus.providers.record import Recorder

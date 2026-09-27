@@ -1068,7 +1068,9 @@ class _Handler(BaseHTTPRequestHandler):
             reasoning=think_on,
         )
         finish = fmt.finish_reason(step, g.finish_reason)
-        if step.get("refusal"):
+        if fmt.harm_blocked(step, req):
+            finish = "SAFETY"
+        if finish == "SAFETY":
             pieces, g.tool_calls = [], []
         n_thoughts = sum(1 for k, _ in pieces if k == "reasoning")
         usage = fmt.usage(len(prompt), cache_n, len(pieces) - n_thoughts, n_thoughts)

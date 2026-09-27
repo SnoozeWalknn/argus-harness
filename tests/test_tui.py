@@ -246,3 +246,25 @@ def test_sessions_picker_reopens_a_session(mock, workspace, db_path):
             assert any("remember this" in t for t in texts(app, ".user"))
 
     run(go())
+
+
+def test_a_refusal_is_shown_and_the_session_goes_on(mock, workspace, db_path, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-000000000")
+    server = mock([{"content": "", "refusal": {"category": "cyber"}}, final("fine")])
+    make = factory(
+        server, workspace, db_path, 'model.provider="anthropic"', 'model.model="claude-opus-5"'
+    )
+    app = ArgusApp(make)
+
+    async def go():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await send(app, pilot, "first try")
+            sid = app.session_id
+            assert any("the model declined" in t for t in texts(app, ".refusal"))
+            assert not texts(app, ".failure")
+            await send(app, pilot, "second try")
+            assert app.session_id == sid
+            assert "fine" in texts(app, ".final")[0]
+
+    run(go())
+    assert [m["role"] for m in server.requests[1]["messages"]] == ["user"]
