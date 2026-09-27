@@ -278,10 +278,28 @@ retried once (with thinking disabled if the reasoning ran away).
 
 ## Tools
 
-`read`, `edit`, `bash`, `glob`, `grep` (plus `skill`, `todo` and `task` when enabled). All go
-through an executor, so they behave identically locally and over SSH
-(`executor.kind = "ssh"`, one `ssh` call per operation over a shared control
-socket, with remote-side timeouts).
+| tool | what it does |
+|---|---|
+| `read` | a file with line numbers (`offset`, `limit`) |
+| `edit` | search/replace in a file; `old=""` creates one |
+| `write` | create a file or replace all of it (an existing file must be read first) |
+| `bash` | a shell command in the workspace, sandboxed; `background=true` starts a job |
+| `job` | background jobs: list them, show new output (waiting up to `wait` s), kill |
+| `glob`, `grep` | find files; regex search (ripgrep when installed) |
+| `ls` | the file tree (honours `.gitignore`), deeper levels summarised |
+| `fetch` | a web page or file as text (HTML → Markdown-ish, JSON pretty-printed, long pages in parts); works for `http://localhost:…` dev servers |
+| `web_search` | web search via [Brave](https://brave.com/search/api/) (`BRAVE_API_KEY`) or a [SearXNG](https://docs.searxng.org/) instance (`tools.search_url` / `SEARXNG_URL`); only offered when one is set up |
+| `skill`, `todo`, `task` | skills, the todo list and subagents (see above) |
+
+All but `fetch` and `web_search` go through an executor, so they behave
+identically locally and over SSH (`executor.kind = "ssh"`, one `ssh` call per
+operation over a shared control socket, with remote-side timeouts). `fetch`
+and `web_search` run in argus itself: they need `sandbox.network = true` (the
+default), and the `ask` policy confirms each host. Background jobs run under
+the same sandbox as `bash`, in their own process group; the TUI keeps them
+across model switches, `argus run` stops them when the run ends. Every tool
+costs prompt tokens (`argus overhead` shows how many); trim the list with
+`tools.enabled`.
 
 - `edit` is search/replace. When `old` is not exact it tries, in order: copied
   line-number prefixes, trailing whitespace, indentation (re-indenting `new`),

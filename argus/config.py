@@ -91,7 +91,20 @@ class AgentConfig:
 
 @dataclass
 class ToolsConfig:
-    enabled: list[str] = field(default_factory=lambda: ["read", "edit", "bash", "glob", "grep"])
+    enabled: list[str] = field(
+        default_factory=lambda: [
+            "read",
+            "edit",
+            "write",
+            "bash",
+            "job",
+            "glob",
+            "grep",
+            "ls",
+            "fetch",
+            "web_search",
+        ]  # fmt: skip
+    )  # web_search only appears when a search backend is configured (tools.search)
     todo: str = "auto"  # the todo tool: auto (frontier models) | on | off
     descriptions: dict[str, str] = field(default_factory=dict)  # per-tool description overrides
     read_max_lines: int = 400
@@ -107,6 +120,13 @@ class ToolsConfig:
     grep_max_matches: int = 100
     glob_max_results: int = 200
     max_line_chars: int = 300  # grep/bash per-line cap
+    job_start_wait: float = 3.0  # bash(background=true): seconds to collect first output
+    fetch_max_chars: int = 20000  # fetch: characters per part of a page
+    fetch_timeout: float = 30.0  # fetch / web_search
+    # web_search: auto (Brave with BRAVE_API_KEY, else SearXNG at search_url or
+    # SEARXNG_URL) | brave | searxng | off
+    search: str = "auto"
+    search_url: str = ""  # SearXNG instance, or another Brave-compatible endpoint
 
 
 @dataclass
@@ -376,6 +396,10 @@ def validate(cfg: Config) -> Config:
         raise ConfigError(f"agent.approval must be one of {POLICIES}, got {cfg.agent.approval!r}")
     if cfg.agent.mode not in ("build", "plan"):
         raise ConfigError(f"agent.mode must be build or plan, got {cfg.agent.mode!r}")
+    if cfg.tools.search not in ("auto", "brave", "searxng", "off"):
+        raise ConfigError(
+            f"tools.search must be auto, brave, searxng or off, got {cfg.tools.search!r}"
+        )
     for where, value in (("tools.todo", cfg.tools.todo), ("agent.subagents", cfg.agent.subagents)):
         if value not in ("auto", "on", "off"):
             raise ConfigError(f"{where} must be auto, on or off, got {value!r}")

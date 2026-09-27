@@ -8,22 +8,26 @@ class BashTool(Tool):
     name = "bash"
     description = (
         "Run a bash command in the workspace root (fresh shell each call) and return "
-        "its combined stdout/stderr and exit code."
+        "its combined stdout/stderr and exit code. background=true starts it as a job "
+        "(servers, watchers) and returns its first output; see the job tool."
     )
     parameters = obj(
         {
             "cmd": {"type": "string"},
             "timeout": {"type": "integer", "description": "seconds"},
+            "background": {"type": "boolean", "description": "run as a background job"},
         },
         ["cmd"],
     )
-    summary = "run a shell command in the workspace"
+    summary = "run a shell command in the workspace (background=true: as a job)"
     mutating = True
 
     def run(self, ctx: ToolContext, args: dict) -> ToolResult:
         cmd = args["cmd"]
         if not cmd.strip():
             raise ToolError("empty command")
+        if args.get("background"):
+            return self.background(ctx, cmd)
         timeout = float(args.get("timeout") or ctx.cfg.bash_timeout)
         timeout = min(max(timeout, 1.0), max(ctx.cfg.bash_timeout * 5, ctx.cfg.bash_timeout))
         r = ctx.executor.run(cmd, timeout=timeout, sandbox=ctx.sandbox)
@@ -47,6 +51,32 @@ class BashTool(Tool):
                 "timed_out": r.timed_out,
                 "output_bytes": r.total_bytes,
                 "cmd_ms": round(r.duration_ms, 1),
+                "sandbox": ctx.sandbox.mode if ctx.sandbox is not None else "off",
+            },
+        )
+
+    def background(self, ctx: ToolContext, cmd: str) -> ToolResult:
+        from argus.tools.jobs import shown
+
+        if ctx.jobs is None:
+            raise ToolError("background jobs are not available here; run it without background")
+        job = ctx.jobs.start(ctx.executor, cmd, ctx.sandbox)
+        # first output: until the job exits, goes quiet for a moment, or a few seconds pass
+        text, truncated = shown(ctx, ctx.jobs.output(job, wait=ctx.cfg.job_start_wait, settle=0.5))
+        body = f"{text.rstrip()}\n" if text.strip() else ""
+        if job.exit_code is not None:
+            tail = f"[job {job.id} exited {job.exit_code}]"
+        else:
+            tail = (
+                f'[job {job.id} running (pid {job.handle.pid}); job(action="output", id={job.id}) '
+                f'shows new output, job(action="kill", id={job.id}) stops it]'
+            )
+        return ToolResult(
+            f"started job {job.id}: {cmd}\n{body}{tail}",
+            truncated=truncated,
+            meta={
+                "job": job.id,
+                "pid": job.handle.pid,
                 "sandbox": ctx.sandbox.mode if ctx.sandbox is not None else "off",
             },
         )

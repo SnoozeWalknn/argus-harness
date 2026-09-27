@@ -77,6 +77,8 @@ STRINGS = [
 def random_value(schema, rng):
     if "const" in schema:
         return schema["const"]
+    if "enum" in schema:
+        return rng.choice(schema["enum"])
     t = schema.get("type")
     if t == "string":
         return rng.choice(STRINGS)

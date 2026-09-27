@@ -28,7 +28,9 @@ def test_measure_native_attributes_tools(mock, workspace):
     ov = measure(agent_for(s.url, workspace, "native"))
     assert ov.method == "server"
     assert ov.total == ov.system + ov.tools + ov.framing
-    assert ov.tools > 0 and set(ov.per_tool) == {"read", "edit", "bash", "glob", "grep"}
+    assert ov.tools > 0 and set(ov.per_tool) == {
+        "read", "edit", "write", "bash", "job", "glob", "grep", "ls", "fetch",
+    }  # fmt: skip
     # marginal costs are each positive and roughly add up to the tools field
     assert all(v > 0 for v in ov.per_tool.values())
     assert sum(ov.per_tool.values()) <= ov.tools

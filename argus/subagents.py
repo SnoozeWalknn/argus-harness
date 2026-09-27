@@ -69,7 +69,7 @@ BUILTIN = [
         "explore",
         "read-only research: find code, read it, answer questions about it",
         EXPLORE_PROMPT,
-        tools=["read", "glob", "grep", "bash"],
+        tools=["read", "glob", "grep", "ls", "bash", "fetch", "web_search"],
         approval="read-only",
         max_turns=25,
     ),

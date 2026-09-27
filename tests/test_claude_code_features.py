@@ -85,7 +85,7 @@ def test_plan_mode_without_sandbox_drops_bash(make_agent):
         [final("plan")], overrides=['agent.mode="plan"', 'sandbox.backend="none"']
     )
     agent.run("x")
-    assert tool_names(server.requests[0]) == ["glob", "grep", "read"]
+    assert tool_names(server.requests[0]) == ["fetch", "glob", "grep", "ls", "read"]
 
 
 # -- subagents -----------------------------------------------------------------------------------
@@ -109,7 +109,7 @@ def test_explore_subagent(make_agent, workspace):
     assert result.status == "completed", result.failures
     parent_req, child_req = server.requests[0], server.requests[1]
     assert "task" in tool_names(parent_req)
-    assert tool_names(child_req) == ["bash", "glob", "grep", "read"]
+    assert tool_names(child_req) == ["bash", "fetch", "glob", "grep", "ls", "read"]
     assert EXPLORE_PROMPT[:40] in child_req["messages"][0]["content"]
     assert child_req["messages"][1]["content"] == "Where is add defined?"  # a fresh context
     tc = agent.store.tool_calls(result.run_id)[0]

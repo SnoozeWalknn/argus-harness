@@ -32,6 +32,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 from argus.sandbox import OFF, READ_ONLY, WORKSPACE_WRITE, Backend
 
@@ -191,6 +192,7 @@ class Gate:
         *,
         can_sandbox: bool = True,
         required: bool = False,
+        network: bool = True,
     ):
         if policy not in POLICIES:
             raise ValueError(f"approval policy must be one of {POLICIES}, got {policy!r}")
@@ -199,6 +201,7 @@ class Gate:
         self.approver = approver
         self.sandboxed = can_sandbox and backend.name != "none"
         self.required = required
+        self.network = network  # may tools in the argus process reach the network
         self.always: set[str] = set()  # remembered "always" answers
         self.warned = False
 
@@ -224,6 +227,8 @@ class Gate:
             return self._bash(args.get("cmd", ""))
         if tool == "task":  # subagents run under a policy no looser than this one
             return Decision(True)
+        if tool in ("fetch", "web_search"):
+            return self._network(tool, args)
         if not mutating:
             return Decision(True)
         p = self.policy
@@ -236,6 +241,30 @@ class Gate:
         why = "edit outside the workspace" if not inside else "the ask policy confirms each edit"
         key = f"{tool}:{'outside' if not inside else 'inside'}"
         return self._ask(key, Request(tool, f"{tool}: {args.get('path', '')}", why, args), OFF)
+
+    def _network(self, tool: str, args: dict[str, Any]) -> Decision:
+        """fetch / web_search run in argus itself: allowed unless the network is off; the
+        ask policy confirms each host (or each search)."""
+        if not self.network:
+            return Decision(False, reason="network access is off (sandbox.network = false)")
+        if self.policy != "ask":
+            return Decision(True)
+        if tool == "fetch":
+            host = urlsplit(str(args.get("url", ""))).hostname or str(args.get("url", ""))
+            req = Request(
+                tool,
+                f"fetch: {args.get('url', '')}",
+                "the ask policy confirms network access",
+                args,
+            )
+            return self._ask(f"fetch:{host}", req, OFF)
+        req = Request(
+            tool,
+            f"web search: {args.get('query', '')}",
+            "the ask policy confirms network access",
+            args,
+        )
+        return self._ask("web_search", req, OFF)
 
     def _bash(self, cmd: str) -> Decision:
         p = self.policy

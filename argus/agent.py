@@ -59,8 +59,9 @@ from argus.subagents import AgentDef, TaskTool, stricter
 from argus.subagents import discover as discover_agents
 from argus.tokens import TokenCounter, measure
 from argus.tools import BUILTIN as BUILTIN_TOOLS
-from argus.tools import ToolContext, ToolError, ToolResult, build_tools
+from argus.tools import FILE_WRITERS, ToolContext, ToolError, ToolResult, build_tools
 from argus.tools.base import Tool, digest
+from argus.tools.jobs import Jobs
 from argus.tools.todo import TodoTool
 
 PLAN_PROMPT = (
@@ -151,8 +152,12 @@ class Agent:
         approver: Approver | None = None,
         subagent: AgentDef | None = None,
         shared: bool = False,
+        jobs: Jobs | None = None,
     ):
         self.cfg = cfg
+        # background jobs; a TUI passes its own so they outlive model switches
+        self.jobs = jobs if jobs is not None else Jobs()
+        self._own_jobs = jobs is None
         self.subagent = subagent  # set when this agent runs as another agent's subagent
         self.shared = shared  # the executor (and maybe the provider) belong to a parent agent
         self._own_llm = llm is None
@@ -205,9 +210,11 @@ class Agent:
         if self.wants(cfg.agent.subagents) and self.subagent is None:
             tools["task"] = TaskTool(self, self.agent_defs or list(SUBAGENTS))
         if cfg.agent.mode == "plan":
-            tools.pop("edit", None)
+            for name in FILE_WRITERS:
+                tools.pop(name, None)
             if not self.gate.sandboxed:
                 tools.pop("bash", None)  # nothing could keep commands read-only
+                tools.pop("job", None)
         return tools
 
     def spawn(self, d: AgentDef, prompt: str, parent_run: str, parent_turn: int) -> RunResult:
@@ -240,6 +247,7 @@ class Agent:
             approver=self.gate.approver,
             subagent=d,
             shared=True,
+            jobs=self.jobs,
         )
         child.gate.always = self.gate.always  # "always" answers hold for the whole session
         try:
@@ -285,6 +293,7 @@ class Agent:
             approver,
             can_sandbox=self.executor.can_sandbox,
             required=sb.required,
+            network=sb.network,
         )
         if a.approval != "full" and not gate.sandboxed:
             where = "on this machine" if self.executor.can_sandbox else "over SSH"
@@ -417,6 +426,8 @@ class Agent:
         return self._lsp
 
     def close(self) -> None:
+        if self._own_jobs:
+            self.jobs.close()
         if self._lsp is not None:
             self._lsp.close()
         self.compactor.close()
@@ -439,7 +450,7 @@ class _Run:
         self.meta = meta
         self.id = new_id()
         self.result = RunResult(self.id)
-        self.tctx = ToolContext(agent.executor, self.cfg.tools, run_id=self.id)
+        self.tctx = ToolContext(agent.executor, self.cfg.tools, run_id=self.id, jobs=agent.jobs)
         self.stop_blocks = 0  # times a stop hook sent the model back to work
         self.context: list[tuple[int, dict[str, Any]]] = []  # (message id, message)
         self.turn = 0
@@ -1007,7 +1018,7 @@ class _Run:
                 if call.name == "bash" and decision.sandbox != OFF:
                     res, ms = self.maybe_escalate(turn, call, decision, res, ms)
                 changes = self.post_check(turn, call, res, pre) if pre else None
-                if call.name == "edit" and res.ok and self.cfg.lsp.enabled:
+                if call.name in FILE_WRITERS and res.ok and self.cfg.lsp.enabled:
                     self.diagnose(turn, res)
                 self.post_tool_hooks(turn, call, res)
                 self.log_skill_use(turn, call, res)
@@ -1228,7 +1239,7 @@ class _Run:
         except Exception as e:
             self.disable_checkpoints(e)
             return None
-        if call.name == "edit" and res.ok:
+        if call.name in FILE_WRITERS and res.ok:
             path = res.meta.get("path", "")
             rel = ex.rel(path)
             if not changes and self.ckpt.git and self.ckpt.git.is_ignored(rel):
@@ -1242,12 +1253,14 @@ class _Run:
             except OSError as e:
                 on_disk = f"unreadable: {e}"
             if res.meta.get("sha1") and on_disk != res.meta["sha1"]:
-                self.fail(turn, "fs_violation", f"{rel} on disk differs from what edit wrote")
+                self.fail(
+                    turn, "fs_violation", f"{rel} on disk differs from what {call.name} wrote"
+                )
         elif changes and not res.ok:
             self.fail(
                 turn, "fs_violation", f"failed {call.name} still changed: {summarize(changes)}"
             )
-        if changes and call.name != "edit":
+        if changes and call.name not in FILE_WRITERS:
             res.text += f"\n[files changed: {summarize(changes)}]"
             for c in changes:
                 self.tctx.tracker.invalidate(ex.resolve(c.path))

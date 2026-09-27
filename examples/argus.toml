@@ -74,7 +74,8 @@ writable = []              # extra writable paths, e.g. ["~/.cache/pip"]
 required = false           # refuse to run commands when no sandbox works here
 
 [tools]
-enabled = ["read", "edit", "bash", "glob", "grep"]   # `skill` is added when skills exist
+# `skill`, `todo` and `task` are added when enabled; web_search only when a backend is set up
+enabled = ["read", "edit", "write", "bash", "job", "glob", "grep", "ls", "fetch", "web_search"]
 todo = "auto"              # the todo tool: auto = frontier models (every tool costs prompt tokens)
 # descriptions = { bash = "Run a shell command." }    # override tool descriptions
 read_max_lines = 400
@@ -87,6 +88,11 @@ bash_head_lines = 40
 bash_tail_lines = 80
 grep_max_matches = 100
 glob_max_results = 200
+job_start_wait = 3.0       # bash(background=true): seconds to collect a job's first output
+fetch_max_chars = 20000    # fetch: characters per part of a page
+fetch_timeout = 30.0
+search = "auto"            # web_search: auto | brave (BRAVE_API_KEY) | searxng | off
+# search_url = "http://localhost:8888"   # a SearXNG instance (or SEARXNG_URL)
 
 [executor]
 kind = "local"             # local | ssh

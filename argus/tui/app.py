@@ -67,7 +67,7 @@ class TUIReporter(Reporter):
         self._put("tool_start", call.name, brief_args(call.args))
 
     def tool_end(self, turn: int, call: Any, result: Any, ms: float) -> None:
-        path = result.meta.get("path") if call.name == "edit" and result.ok else None
+        path = result.meta.get("path") if call.name in ("edit", "write") and result.ok else None
         self._put("tool_end", call.name, result.ok, result.text, ms, path)
 
     def failure(self, turn: int | None, tag: str, detail: str) -> None:

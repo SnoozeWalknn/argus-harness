@@ -62,6 +62,7 @@ class ToolContext:
     todos: list[dict[str, Any]] = field(default_factory=list)  # the todo tool's list
     run_id: str = ""  # the run and turn being executed (for tools that start subagents)
     turn: int = 0
+    jobs: Any = None  # argus.tools.jobs.Jobs: background commands
 
 
 class Tool:

@@ -79,12 +79,8 @@ def test_fix_task_end_to_end(make_agent, workspace, stream):
     # the request the model saw on the last turn carries the tool results and the tools
     last = server.requests[-1]
     assert [t["function"]["name"] for t in last["tools"]] == [
-        "read",
-        "edit",
-        "bash",
-        "glob",
-        "grep",
-    ]
+        "read", "edit", "write", "bash", "job", "glob", "grep", "ls", "fetch",
+    ]  # fmt: skip
     assert last["messages"][2]["tool_calls"][0]["function"]["name"] == "read"
     assert last["messages"][3]["role"] == "tool"
 
