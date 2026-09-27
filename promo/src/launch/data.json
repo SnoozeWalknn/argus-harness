@@ -1,0 +1,293 @@
+{
+  "hero_tokens": [
+    14021,
+    352
+  ],
+  "overhead": {
+    "native": 2114,
+    "json_schema": 451,
+    "grammar": 451
+  },
+  "doctor": [
+    "argus 0.2.0 · Python 3.11.15 · Linux",
+    "config:         ~/.config/argus/config.toml",
+    "sandbox:        ✓ bwrap  (bwrap works, Landlock ABI 7)",
+    "git:            ✓",
+    "rg:             ✓",
+    "bwrap:          ✓",
+    "tui:            ✓ textual 8.2.8",
+    "api keys:       ANTHROPIC_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY",
+    "model server:   ✓ llama_server http://127.0.0.1:8080/v1 ctx 65536 Qwen3-Coder-30B-A3B-Q4_K_M.gguf"
+  ],
+  "tune": {
+    "table": [
+      "variant           pass   rate        95% CI  turns  gen tok  prompt Σ  max ctx  wall s overhead",
+      "native           0/3       0%       [0-56%]    3.0       54      6672     2329     0.4     2114",
+      "json_schema      3/3     100%     [44-100%]    2.0       77      1073      623     0.5      451",
+      "grammar          3/3     100%     [44-100%]    2.0       77      1073      623     0.5      451"
+    ],
+    "ranking": [
+      "  variant               pass   rate  lower95  fail/run  gen tok  wall s",
+      "→ json_schema          3/3     100%      44%      0.00       77     0.5",
+      "  grammar              3/3     100%      44%      0.00       77     0.5",
+      "  native               0/3       0%       0%      1.00       54     0.4"
+    ],
+    "best": "best: json_schema (dry run, nothing saved)"
+  },
+  "install": [
+    "==> installing argus with uv",
+    "    argus-harness[tui] @ git+https://github.com/SnoozeWalknn/argus-harness@main",
+    "==> setting up ~/.config/argus",
+    "    created ~/.config/argus/skills",
+    "    created ~/.config/argus/agents",
+    "    created ~/.config/argus/hooks",
+    "    wrote ~/.config/argus/config.toml",
+    "    next: argus doctor, then argus (TUI) or argus run 'your task'",
+    "==> checking this machine",
+    "argus 0.2.0 · Python 3.11.15 · Linux",
+    "config:         ~/.config/argus/config.toml",
+    "log:            ~/.local/share/argus/argus.db",
+    "sandbox:        ✓ bwrap  (bwrap works, Landlock ABI 7)",
+    "git:            ✓",
+    "rg:             ✓",
+    "bwrap:          ✓",
+    "tui:            ✓ textual 8.2.8",
+    "api keys:       none set",
+    "model server:   ✗ none on the usual ports",
+    "lsp python:     ✓ pylsp",
+    "lsp typescript: ✗",
+    "lsp go:         ✗",
+    "lsp rust:       ✗",
+    "lsp c:          ✗",
+    "suggestions:",
+    "  start a local model server (llama-server, Ollama, ...) or set an API key such as ANTHROPIC_API_KEY",
+    "~/.local/bin is not on your PATH; add it, e.g.:",
+    "    export PATH=\"~/.local/bin:$PATH\"",
+    "done. Run argus in a project directory, or argus run \"your task\"."
+  ],
+  "models": [
+    "  ● fable       anthropic/claude-fable-5-1          ",
+    "  ● opus        anthropic/claude-opus-5-5           ",
+    "  ● sonnet      anthropic/claude-sonnet-5           ",
+    "  ● haiku       anthropic/claude-haiku-4-5          ",
+    "  ○ gpt         openai/gpt-5                        needs OPENAI_API_KEY",
+    "  ○ gpt-mini    openai/gpt-5-mini                   needs OPENAI_API_KEY",
+    "  ● gemini      gemini/gemini-2.5-pro               ",
+    "  ● gemini-3    gemini/gemini-3-pro-preview         ",
+    "  ● flash       gemini/gemini-2.5-flash             ",
+    "  ● qwen-cloud  openrouter/qwen/qwen3-coder         "
+  ],
+  "tests": 476,
+  "anchors": {
+    "hero-thinking": {
+      "size": [
+        1726.0,
+        1026.0
+      ],
+      "thinking": [
+        45.6,
+        127.2,
+        122.0
+      ],
+      "meter": [
+        1290.0,
+        102.8,
+        73.2
+      ],
+      "rate": [
+        1338.8,
+        151.6,
+        61.0
+      ]
+    },
+    "hero-done": {
+      "size": [
+        1726.0,
+        1026.0
+      ],
+      "todo": [
+        1253.4,
+        298.0,
+        48.8
+      ],
+      "changed": [
+        1253.4,
+        420.0,
+        85.4
+      ],
+      "final": [
+        45.6,
+        786.0,
+        61.0
+      ],
+      "tests": [
+        94.4,
+        737.2,
+        109.8
+      ],
+      "meter": [
+        1290.0,
+        102.8,
+        73.2
+      ],
+      "spark": [
+        1277.8,
+        224.8,
+        61.0
+      ],
+      "status": [
+        106.6,
+        54.0,
+        183.0
+      ]
+    },
+    "picker": {
+      "size": [
+        1726.0,
+        1026.0
+      ],
+      "title": [
+        118.8,
+        176.0,
+        146.4
+      ],
+      "opus": [
+        167.6,
+        395.6,
+        48.8
+      ],
+      "needs": [
+        1143.6,
+        468.8,
+        244.0
+      ],
+      "recent": [
+        1046.0,
+        346.8,
+        73.2
+      ]
+    },
+    "picker-filtered": {
+      "size": [
+        1726.0,
+        1026.0
+      ],
+      "opus": [
+        155.4,
+        273.6,
+        48.8
+      ]
+    },
+    "switched-done": {
+      "size": [
+        1726.0,
+        1026.0
+      ],
+      "status": [
+        106.6,
+        54.0,
+        183.0
+      ],
+      "continues": [
+        802.0,
+        517.6,
+        256.2
+      ],
+      "edited": [
+        70.0,
+        664.0,
+        329.4
+      ],
+      "user": [
+        45.6,
+        566.4,
+        134.2
+      ]
+    },
+    "subagent-jobs": {
+      "size": [
+        1726.0,
+        1026.0
+      ],
+      "explore": [
+        21.2,
+        298.0,
+        195.2
+      ],
+      "job": [
+        70.0,
+        444.4,
+        158.6
+      ],
+      "fetch": [
+        45.6,
+        542.0,
+        122.0
+      ],
+      "jobs": [
+        1253.4,
+        468.8,
+        36.6
+      ]
+    },
+    "approval": {
+      "size": [
+        1726.0,
+        1026.0
+      ],
+      "cmd": [
+        350.6,
+        468.8,
+        207.4
+      ],
+      "always": [
+        631.2,
+        590.8,
+        73.2
+      ]
+    },
+    "plan": {
+      "size": [
+        1726.0,
+        1026.0
+      ],
+      "badge": [
+        802.0,
+        54.0,
+        48.8
+      ],
+      "title": [
+        45.6,
+        468.8,
+        244.0
+      ]
+    },
+    "lsp": {
+      "size": [
+        1726.0,
+        1026.0
+      ],
+      "warn": [
+        167.6,
+        517.6,
+        195.2
+      ],
+      "error": [
+        350.6,
+        542.0,
+        170.8
+      ]
+    },
+    "refusal": {
+      "size": [
+        1726.0,
+        1026.0
+      ],
+      "declined": [
+        45.6,
+        127.2,
+        219.6
+      ]
+    }
+  }
+}

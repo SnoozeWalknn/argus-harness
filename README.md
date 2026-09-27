@@ -13,7 +13,8 @@ detail to say why it failed and whether config B did better than config A.
 
 Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (the headless core) and
 [docs/MODEL-AGNOSTIC.md](docs/MODEL-AGNOSTIC.md) (providers, profiles, and
-everything on top). A 60-second promo video and its Remotion source live in
+everything on top). A 90-second launch film ([promo/argus-launch.mp4](promo/argus-launch.mp4)), the earlier
+60-second promo and their Remotion source live in
 [promo/](promo/).
 
 ## Install

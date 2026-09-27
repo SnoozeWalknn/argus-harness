@@ -15,7 +15,7 @@ if (!outDir || frames.length === 0) {
 mkdirSync(outDir, {recursive: true});
 const serveUrl = await bundle({entryPoint: join(root, 'src/index.ts')});
 const browserExecutable = process.env.REMOTION_BROWSER_EXECUTABLE ?? null;
-const composition = await selectComposition({serveUrl, id: 'ArgusPromo', browserExecutable});
+const composition = await selectComposition({serveUrl, id: process.env.COMPOSITION ?? 'ArgusPromo', browserExecutable});
 for (const f of frames.map(Number)) {
   const output = resolve(outDir, `frame-${String(f).padStart(4, '0')}.png`);
   await renderStill({composition, serveUrl, frame: f, output, browserExecutable});
