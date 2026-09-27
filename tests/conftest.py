@@ -82,6 +82,9 @@ def _isolated_home(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("ARGUS_SHADOW_ROOT", str(tmp_path / "shadow"))
+    # no language servers from PATH (tests that want one configure lsp.servers)
+    monkeypatch.setenv("ARGUS_LSP_AUTODETECT", "0")
+    monkeypatch.setenv("ARGUS_LOCAL_SERVERS", "")  # no probing of real local model servers
     for name in (
         "ARGUS_RECORD",
         "ANTHROPIC_API_KEY",

@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "argus-harness"
-version = "0.1.0"
-description = "Headless terminal coding-agent harness for local models served by llama-server"
+version = "0.2.0"
+description = "Model-agnostic headless coding agent and measurement harness, with a terminal UI"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["httpx>=0.27"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5"]
+tui = ["textual>=0.86"]
+dev = ["pytest>=8", "ruff>=0.5", "textual>=0.86", "python-lsp-server[pyflakes]>=1.12"]
 
 [project.scripts]
 argus = "argus.cli:main"
@@ -21,6 +22,7 @@ include = ["argus*"]
 
 [tool.setuptools.package-data]
 "argus.data" = ["*.toml", "tune/**/*"]
+"argus.tui" = ["*.tcss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

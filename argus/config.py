@@ -189,6 +189,12 @@ class LSPConfig:
 
 
 @dataclass
+class TUIConfig:
+    theme: str = "auto"  # auto: the last one picked, else Omarchy's current theme, else tokyo-night
+    show_reasoning: bool = True
+
+
+@dataclass
 class HookConfig:
     event: str = ""  # session_start | user_prompt | pre_tool | post_tool | stop
     command: str = ""
@@ -215,6 +221,7 @@ class Config:
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     log: LogConfig = field(default_factory=LogConfig)
     lsp: LSPConfig = field(default_factory=LSPConfig)
+    tui: TUIConfig = field(default_factory=TUIConfig)
     hooks: list[HookConfig] = field(default_factory=list)
 
     @property
@@ -404,22 +411,20 @@ def explicit_keys(data: dict[str, Any]) -> set[str]:
 
 
 def load_config(
-    path: str | Path | None = None,
+    path: str | Path | list[Path] | None = None,
     overrides: list[str] | None = None,
     name: str | None = None,
     profiles: bool = True,
 ) -> Config:
-    """Load a config file, apply overrides, then fill unset keys from the model's profile."""
+    """Load a config file (or layers of them, lowest precedence first), apply overrides,
+    then fill unset keys from the model's profile."""
     data: dict[str, Any] = {}
-    if path:
-        p = Path(path)
-        try:
-            data = tomllib.loads(p.read_text())
-        except FileNotFoundError:
-            raise ConfigError(f"config file not found: {p}") from None
-        except tomllib.TOMLDecodeError as e:
-            raise ConfigError(f"{p}: {e}") from None
-        data.setdefault("name", p.stem)
+    paths = [Path(p) for p in path] if isinstance(path, list) else ([Path(path)] if path else [])
+    if paths:
+        from argus.defaults import read_layers
+
+        data = read_layers(paths)
+        data.setdefault("name", paths[-1].stem)
     cfg = _build(Config, data)
     cfg.explicit.update(explicit_keys(data) - {"name"})
     for o in overrides or []:

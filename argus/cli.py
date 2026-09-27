@@ -15,7 +15,11 @@ from argus.store import Store
 from argus.suite import SuiteError
 
 
-def _config(args: argparse.Namespace) -> Config:
+def _config(args: argparse.Namespace, pick: bool = False) -> Config:
+    """Config from the layered files, -m/-o and flags. ``pick``: choose a model when none
+    is configured (a local server, else a cloud API with a key)."""
+    from argus.defaults import config_layers, pick_model
+
     overrides = list(getattr(args, "override", None) or [])
     if getattr(args, "db", None):
         overrides.append(f"log.db={json.dumps(args.db)}")
@@ -31,7 +35,15 @@ def _config(args: argparse.Namespace) -> Config:
         overrides.insert(0, 'agent.mode="plan"')
     if getattr(args, "record", None):
         overrides.append(f"model.record_dir={json.dumps(args.record)}")
-    cfg = load_config(getattr(args, "config", None), overrides)
+    local_dir = workdir or os.getcwd()
+    layers = config_layers(local_dir, getattr(args, "config", None))
+    cfg = load_config(layers, overrides)
+    if pick:
+        chosen, why = pick_model(cfg.explicit)
+        if chosen:
+            cfg = load_config(layers, chosen + overrides)
+            if not getattr(args, "quiet", False):
+                print(f"argus: {why}", file=sys.stderr)
     if workdir and cfg.executor.kind == "local":  # an SSH workdir is a path on the remote host
         cfg.executor.workdir = str(Path(workdir).resolve())
     return cfg
@@ -89,7 +101,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not task or not task.strip():
         print("argus: empty task", file=sys.stderr)
         return 2
-    cfg = _config(args)
+    cfg = _config(args, pick=True)
     session = None
     if getattr(args, "cont", False) or getattr(args, "session", None):
         store = Store(cfg.db_path())
@@ -141,6 +153,60 @@ def _approver(args: argparse.Namespace, cfg: Config):
     if cfg.agent.approval in ("ask", "auto") and sys.stdin.isatty() and sys.stderr.isatty():
         return TTYApprover()
     return None
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    from argus.defaults import init
+
+    for line in init(force=args.force):
+        print(line)
+    print("next: argus doctor, then argus (TUI) or argus run 'your task'")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    from argus.defaults import doctor, format_doctor
+
+    report = doctor()
+    print(json.dumps(report, indent=2) if args.json else format_doctor(report))
+    return 0
+
+
+def cmd_tui(args: argparse.Namespace) -> int:
+    from argus.tui import available
+
+    if not available():
+        print(
+            "argus: the TUI needs Textual: pip install 'argus-harness[tui]' "
+            "(or uv tool install 'argus-harness[tui]')",
+            file=sys.stderr,
+        )
+        return 2
+    from argus.tui.app import ArgusApp
+
+    def make_config(spec: str | None) -> Config:
+        a = argparse.Namespace(**vars(args))
+        a.quiet = True
+        if spec:
+            a.model = spec
+        return _config(a, pick=not spec and not args.model)
+
+    session = None
+    if args.session or args.cont:
+        cfg = make_config(None)
+        store = Store(cfg.db_path())
+        try:
+            workspace = cfg.executor.workdir or os.getcwd()
+            session = store.resolve_session(
+                args.session or "last", None if args.session else workspace
+            )
+        except KeyError as e:
+            print(f"argus: {e.args[0]}", file=sys.stderr)
+            return 2
+        finally:
+            store.close()
+    ArgusApp(make_config, session=session).run()
+    return 0
 
 
 def cmd_sessions(args: argparse.Namespace) -> int:
@@ -623,11 +689,25 @@ def _add_batch_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--json", action="store_true", help="print the report as JSON")
 
 
+def _add_tui_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("-w", "--workdir", help="workspace directory")
+    _add_config_args(p)
+    p.add_argument(
+        "--continue", dest="cont", action="store_true", help="continue the latest session here"
+    )
+    p.add_argument("--session", help="continue this session")
+    p.add_argument("--plan", action="store_true", help="start in plan mode")
+    p.add_argument("--approval", choices=["read-only", "ask", "auto", "full"])
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="argus", description="Model-agnostic, headless coding agent and measurement harness."
     )
-    sub = p.add_subparsers(dest="command", required=True)
+    from argus import __version__
+
+    p.add_argument("--version", action="version", version=f"argus {__version__}")
+    sub = p.add_subparsers(dest="command")
 
     r = sub.add_parser("run", help="run one task")
     r.add_argument("task", nargs="?", help="task text, or - for stdin")
@@ -655,6 +735,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     r.add_argument("--session", help="continue this session (id prefix)")
     r.set_defaults(fn=cmd_run)
+
+    tu_ = sub.add_parser("tui", help="the terminal UI (also: argus with no arguments)")
+    _add_tui_args(tu_)
+    tu_.set_defaults(fn=cmd_tui)
+
+    it = sub.add_parser("init", help="write ~/.config/argus/config.toml and directories")
+    it.add_argument("--force", action="store_true", help="overwrite an existing config")
+    it.set_defaults(fn=cmd_init)
+
+    dr = sub.add_parser("doctor", help="what works on this machine")
+    dr.add_argument("--json", action="store_true")
+    dr.set_defaults(fn=cmd_doctor)
 
     ss = sub.add_parser("sessions", help="list recent sessions")
     ss.add_argument("-n", "--limit", type=int, default=20)
@@ -811,7 +903,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command is None:  # plain `argus`: the TUI when it is installed
+        from argus.tui import available
+
+        if not available() or not sys.stdout.isatty():
+            parser.print_help()
+            return 0
+        args = parser.parse_args(["tui"])
     try:
         return int(args.fn(args) or 0)
     except ConfigError as e:

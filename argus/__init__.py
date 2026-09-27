@@ -1,3 +1,3 @@
-"""argus: a headless coding-agent harness for local models served by llama-server."""
+"""argus: a model-agnostic, headless coding agent and measurement harness."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

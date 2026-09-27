@@ -10,6 +10,7 @@ right after the edit that caused it instead of turns later.
 Servers are looked up per language from ``lsp.servers`` or, by default, the
 first of the known servers that is installed: pyright / basedpyright / pylsp for
 Python, typescript-language-server, gopls, rust-analyzer, clangd.
+``ARGUS_LSP_AUTODETECT=0`` turns the lookup off (only configured servers run).
 """
 
 from __future__ import annotations
@@ -313,6 +314,8 @@ class Diagnostics:
         if lang in self.cfg.servers:
             argv = list(self.cfg.servers[lang])
             return argv or None
+        if os.environ.get("ARGUS_LSP_AUTODETECT", "1").lower() in ("0", "false", "off", "no"):
+            return None  # only servers configured in lsp.servers
         for argv in LANGUAGES[lang]["servers"]:
             if self.executor.has_command(argv[0]):
                 return list(argv)

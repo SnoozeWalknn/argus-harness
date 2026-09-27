@@ -9,6 +9,10 @@ that already exists (the LLM client, the executor, the tool registry, the
 
 The original design is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
+**Status:** milestones 9–16 below are built, one commit each; the README
+describes how to use them. Where the build differs from this proposal, the
+proposal has been updated to match.
+
 ## Principles
 
 1. **Headless core first.** The CLI and the TUI are both clients of the same
@@ -246,8 +250,8 @@ the usual report is printed. `--dry-run` reports without saving.
   (`runs.mode = 'plan'`). Approving it continues the same session in build
   mode.
 - **Todo list.** `todo(items=[{content, status}])` replaces the list and
-  echoes it compactly. Stored in a `todos` table, shown in the TUI sidebar and
-  in `argus show`. On by default for models with at least 64k context, off
+  echoes it compactly. Logged as `todo` events, shown in the TUI sidebar and
+  in `argus show`. On by default for frontier models (`tools.todo = "auto"`), off
   for small local models where every tool costs prompt tokens.
 - **Progressive-disclosure skills.** Level 1 (name and description in the
   prompt) and level 2 (`skill(name)` loads SKILL.md) exist; level 2 now also
@@ -296,10 +300,10 @@ boundary; the sandbox is off there.
   run's final context plus the new user message. Each run remains a complete,
   separately analysable row; a `sessions` table ties them together.
 - **Switching providers mid-session.** The next run of a session may use
-  another model, provider or protocol (`-m`, `/model` in the TUI). When the
+  another model, provider or protocol (`-m`, ctrl+o in the TUI). When the
   protocol family changes, history is converted (constrained JSON actions ⇄
   native tool calls, using the logged tool calls), the system prompt is
-  rebuilt, and replay state is filtered by provider. Logged as a `switch`
+  rebuilt, and replay state is filtered by provider. Logged in the run's `session`
   event.
 - **LSP diagnostics after edits.** A minimal JSON-RPC client over stdio
   (`argus/lsp.py`) starts language servers lazily per language (pyright or
@@ -332,23 +336,26 @@ boundary; the sandbox is off there.
   `Reporter` callbacks are posted to the UI as messages, and approvals are a
   modal that the worker waits on. Header (model, provider, mode, policy,
   context %, tokens, cost), transcript (reasoning collapsed, tool calls and
-  results, diffs), sidebar (todos, changed files, subagents), prompt. Keys:
+  results, diffs), sidebar (todos, changed files, session), prompt. Keys:
   enter send, tab plan/build, ctrl+o model, ctrl+t theme, ctrl+s sessions,
-  ctrl+n new session, esc interrupt, y/n/a in approvals, ctrl+p command
-  palette, ctrl+q quit. Themes: Textual's built-ins plus Omarchy-style ones
-  (tokyo-night, catppuccin, gruvbox, nord, everforest, kanagawa, rose-pine,
-  matte-black), following `~/.config/omarchy/current/theme` when it exists.
-  Tested with Textual's `Pilot` against the mock server.
+  ctrl+n new session, ctrl+d diff of the last run, esc interrupt, y/a/n in
+  approvals, ctrl+p command palette, ctrl+q quit. Themes: Textual's built-ins
+  plus Omarchy-style ones (matte-black, everforest, kanagawa, osaka-jade,
+  ristretto). The last choice is remembered in `$XDG_STATE_HOME/argus/tui.json`;
+  without one, the TUI follows `~/.config/omarchy/current/theme` when it exists. Tested with
+  Textual's `Pilot` against the mock server.
 
-## Storage: schema v2, migrated in place
+## Storage: schema v5, migrated in place
 
-- `runs` + `session_id`, `parent_run_id`, `parent_turn`, `provider`, `mode`,
+- `runs` + `session_id`, `parent_run_id`, `parent_turn`, `agent`, `provider`, `mode`,
   `cost_usd`, `cache_read_tokens`, `cache_write_tokens`
 - `turns` + `cache_write_tokens`, `cost_usd`, `provider`, `model`
 - `messages` + `replay_json`
-- new tables: `sessions`, `approvals`, `todos`, `diagnostics`
+- new tables: `sessions`, `contexts` (a session's message ids, so a continued run
+  references earlier messages instead of copying them), `approvals`
 
-Hooks, switches, sandbox decisions and retries go to `events`.
+Todos, diagnostics, hooks, provider notes, switches and sandbox decisions go to
+`events`.
 
 ## Config additions
 
@@ -404,7 +411,7 @@ install.sh
 | 13 | Sandbox and approval policies | writes outside the workspace blocked under bubblewrap and under Landlock; every policy tested; approvals logged |
 | 14 | Todo, plan mode, subagents, hooks, progressive skills | a scripted scenario for each |
 | 15 | Sessions, resume, mid-session switching, LSP diagnostics | resume across processes; llama-server → Anthropic switch mid-session; diagnostics appended after a bad edit |
-| 16 | Defaults, installer, doctor, TUI and themes | Pilot tests drive a full session; the installer works in a temporary `HOME` |
+| 16 | Defaults, installer, doctor, TUI and themes | Pilot tests drive a full session; the installer works in a temporary `HOME` (with stand-ins for uv/pipx in the suite; for real with `ARGUS_TEST_INSTALL=1`) |
 
 Providers come first because profiles, tuning, subagents on other models and
 switching all need them. The sandbox comes before plan mode, which is the
