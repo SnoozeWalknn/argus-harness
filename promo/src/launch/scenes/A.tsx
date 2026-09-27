@@ -304,7 +304,7 @@ export const Switch: React.FC = () => {
             <Panel name="picker-filtered" width={W_SW} style={{position: 'absolute', left: 0, top: 0, opacity: filtered * (1 - swap)}} />
             <Panel name="switched-done" width={W_SW} style={{position: 'absolute', left: 0, top: 0, opacity: swap}} />
             <div style={{position: 'absolute', inset: 0}}>
-              <Callout x={p('opus')[0] - 30} y={p('opus')[1]} dx={-70} dy={-120} at={26} out={66} label="● ready: key found" color="#4ade80" />
+              <Callout x={p('opus')[0] + p('opus')[2] + 10} y={p('opus')[1]} dx={560} dy={-30} at={26} out={66} label="● ready: key found" color="#4ade80" />
               <Callout x={p('needs')[0] + 40} y={p('needs')[1] + 10} dx={-60} dy={150} at={40} out={66} label="○ needs a key" color="#fbbf24" />
               {f > 84 && f < 118 ? (
                 <div

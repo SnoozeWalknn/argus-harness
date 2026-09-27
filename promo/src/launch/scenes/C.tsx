@@ -278,7 +278,7 @@ export const Install: React.FC = () => {
   const c = chapter('install');
   const card = settle(f, 10, fps, 1.1);
   const typed = INSTALL.slice(0, Math.max(0, Math.floor((f - 24) * 3.2)));
-  const shown = Math.max(0, Math.floor((f - 62) / 7));
+  const shown = Math.max(0, Math.floor((f - 58) / 6));
   return (
     <AbsoluteFill>
       <ChapterTag n={c.n} title={c.title} accent={c.accent} />
