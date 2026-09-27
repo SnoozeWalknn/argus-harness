@@ -115,6 +115,13 @@ base_url = "http://127.0.0.1:8081/v1"   # second llama-server with a small model
 model = "qwen-small"
 max_tokens = 1024
 
+[lsp]
+enabled = true             # language-server errors appended to edit results, when a server is installed
+# servers = { python = ["pylsp"], typescript = ["typescript-language-server", "--stdio"] }
+wait_ms = 3000             # how long to wait for diagnostics after an edit
+warnings = false
+max_items = 10
+
 [log]
 # db = "~/.local/share/argus/argus.db"   # or $ARGUS_DB
 measure_overhead = true

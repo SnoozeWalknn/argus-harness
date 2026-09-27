@@ -107,6 +107,7 @@ def make_agent(mock, workspace, db_path):
                 f"log.db={q(str(db_path))}",
                 "model.timeout=20",
                 "model.retries=0",
+                "lsp.enabled=false",  # tests that want language servers turn them on
                 *overrides,
             ],
         )

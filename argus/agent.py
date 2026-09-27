@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 import time
 import traceback
 from collections.abc import Callable
@@ -33,14 +34,16 @@ from argus.fsstate import (
     summarize,
 )
 from argus.hooks import HookResult, Hooks
+from argus.lsp import Diagnostics
 from argus.profiles import apply_profile, turn_cost
 from argus.prompt import PromptParts, base_prompt
 from argus.protocols import Parsed, Protocol, ToolCall, make_protocol
 from argus.providers import Provider, provider_from_config, strip_replay
-from argus.providers.base import Completion, ContextOverflow, Delta, LLMError
+from argus.providers.base import Completion, ContextOverflow, Delta, LLMError, StopGeneration
 from argus.sandbox import OFF, WORKSPACE_WRITE, Backend, NoSandbox, SandboxError
 from argus.sandbox import Spec as SandboxSpec
 from argus.sandbox import choose as choose_sandbox
+from argus.session import history as session_history
 from argus.skills import (
     Skill,
     SkillTool,
@@ -119,6 +122,11 @@ class RunResult:
         return sorted({t for t, _ in self.failures})
 
 
+def first_line(text: str, limit: int = 100) -> str:
+    line = text.strip().splitlines()[0] if text.strip() else ""
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
 def brief_args(args: dict[str, Any], limit: int = 80) -> str:
     parts = []
     for k, v in args.items():
@@ -167,6 +175,8 @@ class Agent:
             self.executor.workdir if self.executor.kind == "local" else None,
         )
         self._pricing: dict[str, float] | None = None
+        self._lsp: Diagnostics | None = None
+        self.cancelled = threading.Event()  # set by cancel(); the run stops at the next check
         self.agents_md: list[tuple[str, str]] = []
         self.skills: list[Skill] = []
         self.agent_defs: list[AgentDef] = []
@@ -373,13 +383,40 @@ class Agent:
         variant: str | None = None,
         after_turn: Callable[[int, _Run], None] | None = None,
         parent: tuple[str, int] | None = None,
+        session: str | None = None,
     ) -> RunResult:
-        """Run one task. ``after_turn(turn, run)`` is called after each tool turn."""
-        run = _Run(self, task, task_id=task_id, batch_id=batch_id, variant=variant, parent=parent)
+        """Run one task. ``after_turn(turn, run)`` is called after each tool turn.
+
+        ``session`` continues that session's conversation; without it, an interactive
+        run starts a new session (suite, tune and subagent runs belong to none).
+        """
+        run = _Run(
+            self,
+            task,
+            task_id=task_id,
+            batch_id=batch_id,
+            variant=variant,
+            parent=parent,
+            session=session,
+        )
         run.after_turn = after_turn
+        self.cancelled.clear()
         return run.execute()
 
+    def cancel(self) -> None:
+        """Stop the current run (from another thread): generation is aborted, no further
+        tool calls start, and the run ends as interrupted."""
+        self.cancelled.set()
+
+    @property
+    def lsp(self) -> Diagnostics:
+        if self._lsp is None:
+            self._lsp = Diagnostics(self.executor, self.cfg.lsp)
+        return self._lsp
+
     def close(self) -> None:
+        if self._lsp is not None:
+            self._lsp.close()
         self.compactor.close()
         if not self.shared or self._own_llm:
             self.llm.close()
@@ -441,6 +478,9 @@ class _Run:
         t0 = time.perf_counter()
         parts = a.prompt_parts()
         parent = self.meta.get("parent") or (None, None)
+        self.session_id = self.meta.get("session")
+        if self.session_id is None and not self.meta.get("batch_id") and parent[0] is None:
+            self.session_id = self.store.new_session(first_line(self.task), a.executor.workdir)
         self.store.start_run(
             self.id,
             task=self.task,
@@ -459,6 +499,7 @@ class _Run:
             agent=a.subagent.name if a.subagent else None,
             parent_run_id=parent[0],
             parent_turn=parent[1],
+            session_id=self.session_id,
         )
         self.rep.run_start(self.id, self.task)
         try:
@@ -504,7 +545,10 @@ class _Run:
                     return self.result
                 if res.ok and res.stdout.strip():
                     task += f"\n\n{res.stdout.strip()}"
-            self.add({"role": "system", "content": parts.render()}, None)
+            self.system_prompt = parts.render()
+            self.add({"role": "system", "content": self.system_prompt}, None)
+            if self.meta.get("session"):
+                self.continue_session(self.meta["session"])
             self.add({"role": "user", "content": task}, None)
             self.loop()
         except KeyboardInterrupt:
@@ -519,6 +563,7 @@ class _Run:
                 self.result.error = self.result.error or "run ended without a status"
                 self.finish("error")
             self.final_checkpoint()
+            self.save_session()
             r = self.result
             r.wall_ms = (time.perf_counter() - t0) * 1000
             self.store.update_run(
@@ -543,6 +588,63 @@ class _Run:
             self.rep.run_end(r)
         return self.result
 
+    def continue_session(self, session_id: str) -> None:
+        """Start from the conversation the session's last run ended with."""
+        sess = self.store.session(session_id)
+        last = sess["last_run_id"]
+        loaded = self.store.load_context(last) if last else None
+        if loaded is None:
+            self.store.add_event(self.id, None, "session", {"session": session_id, "history": 0})
+            return
+        old_system, entries = loaded
+        prev = self.store.run(last)
+        entries, converted = session_history(
+            entries, from_protocol=prev["protocol"] or "native", to_protocol=self.protocol.name
+        )
+        for mid, msg in entries:
+            if converted:
+                self.add(msg, None, kind="history")
+            else:
+                self.context.append((mid, msg))
+        switched = (prev["model"], prev["provider"]) != (
+            self.cfg.model.model,
+            self.agent.llm.describe(),
+        )
+        if switched or old_system != self.system_prompt:
+            self.drop_replay("session continued with another model or system prompt")
+        self.projection_from = 0  # none of this history has been counted by a server yet
+        self.store.add_event(
+            self.id,
+            None,
+            "session",
+            {
+                "session": session_id,
+                "continued_from": last,
+                "history": len(entries),
+                "converted": converted and f"{prev['protocol']} -> {self.protocol.name}",
+                "switched": switched
+                and {
+                    "from": [prev["provider"], prev["model"]],
+                    "to": [self.agent.llm.describe(), self.cfg.model.model],
+                },
+            },
+        )
+
+    def save_session(self) -> None:
+        if not self.session_id or not getattr(self, "system_prompt", ""):
+            return
+        try:
+            self.store.save_context(self.id, self.system_prompt, self.context)
+            self.store.update_session(
+                self.session_id,
+                last_run_id=self.id,
+                model=self.cfg.model.model,
+                provider=self.agent.llm.describe(),
+                protocol=self.protocol.name,
+            )
+        except Exception as e:  # never lose the run over the session bookkeeping
+            self.store.add_event(self.id, self.turn, "session_error", f"{type(e).__name__}: {e}")
+
     def record_overhead(self) -> None:
         a = self.agent
         try:
@@ -562,6 +664,8 @@ class _Run:
             self.turn = turn
             self.tctx.turn = turn
             self.turn_mutated = False
+            if self.check_cancelled(turn):
+                return
             if self.over_budget(turn):
                 return
             if cfg.max_wall_seconds and time.perf_counter() - self.t0 > cfg.max_wall_seconds:
@@ -624,6 +728,9 @@ class _Run:
             parsed = self.protocol.parse(c, turn)
             self.record_turn(turn, c, parsed, attempt)
             thinking_only = bool(c.reasoning.strip()) and not c.content.strip() and not parsed.calls
+            if c.aborted == "cancelled":
+                self.check_cancelled(turn)
+                return None
             if c.aborted == "repetition":
                 self.fail(turn, "loop", c.abort_detail)
             elif c.aborted:
@@ -765,14 +872,26 @@ class _Run:
             self.drop_replay("rejected by the provider")
         return c
 
+    def check_cancelled(self, turn: int) -> bool:
+        if not self.agent.cancelled.is_set():
+            return False
+        if self.result.status == "running":
+            self.fail(turn, "interrupted", "cancelled by the user")
+            self.finish("interrupted")
+        return True
+
     def monitors(self) -> list:
         a = self.cfg.agent
-        ms: list = [self.rep.delta]
+        ms: list = [self.rep.delta, self._cancel_monitor]
         if a.max_reasoning_tokens:
             ms.append(ReasoningBudget(a.max_reasoning_tokens))
         if a.repetition_window:
             ms.append(RepetitionMonitor(a.repetition_window))
         return ms
+
+    def _cancel_monitor(self, d: Delta) -> None:
+        if self.agent.cancelled.is_set():
+            raise StopGeneration("cancelled", "cancelled by the user")
 
     def record_turn(self, turn: int, c: Completion, p: Parsed, attempt: int = 0) -> None:
         r = self.result
@@ -842,6 +961,8 @@ class _Run:
         """Execute the turn's calls; returns how many were valid."""
         valid = 0
         for i, call in enumerate(parsed.calls):
+            if self.check_cancelled(turn):
+                break
             self.rep.tool_start(turn, call)
             pre, changes = None, None
             if call.error:
@@ -873,6 +994,8 @@ class _Run:
                 if call.name == "bash" and decision.sandbox != OFF:
                     res, ms = self.maybe_escalate(turn, call, decision, res, ms)
                 changes = self.post_check(turn, call, res, pre) if pre else None
+                if call.name == "edit" and res.ok and self.cfg.lsp.enabled:
+                    self.diagnose(turn, res)
                 self.post_tool_hooks(turn, call, res)
                 self.log_skill_use(turn, call, res)
                 verdict = self.loops.observe(
@@ -1155,6 +1278,40 @@ class _Run:
         if tool.mutating or not d.allow or d.asked:
             self.log_decision(turn, call, d)
         return d
+
+    def diagnose(self, turn: int, res: ToolResult) -> None:
+        """Language-server errors in the file an edit just wrote, appended to the result."""
+        ex = self.agent.executor
+        path = res.meta.get("path", "")
+        try:
+            text = ex.read_bytes(path).decode("utf-8", "replace")
+            report = self.agent.lsp.check(ex.resolve(path), text)
+        except Exception as e:  # diagnostics are a bonus; never fail an edit over them
+            self.store.add_event(self.id, turn, "diagnostics_error", f"{type(e).__name__}: {e}")
+            return
+        if report is None:
+            return
+        cfg = self.cfg.lsp
+        items = report.errors(cfg.warnings)
+        rel = ex.rel(path)
+        self.store.add_event(
+            self.id,
+            turn,
+            "diagnostics",
+            {
+                "path": rel,
+                "server": report.server,
+                "items": [d.__dict__ for d in report.diagnostics],
+                "timed_out": report.timed_out,
+                "error": report.error,
+            },
+        )
+        res.meta["diagnostics"] = len(items)
+        if items:
+            shown = "\n".join(d.render(rel) for d in items[: cfg.max_items])
+            more = len(items) - cfg.max_items
+            tail = f"\n... {more} more" if more > 0 else ""
+            res.text += f"\n[{report.server} reports after this edit:\n{shown}{tail}]"
 
     def post_tool_hooks(self, turn: int, call: ToolCall, res: ToolResult) -> None:
         payload = {"tool": call.name, "args": call.args, "ok": res.ok, "result": res.text}

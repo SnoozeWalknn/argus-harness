@@ -179,6 +179,16 @@ class CompactionConfig:
 
 
 @dataclass
+class LSPConfig:
+    enabled: bool = True  # diagnostics after edits, when a language server is installed
+    servers: dict[str, list[str]] = field(default_factory=dict)  # language -> argv ([] = off)
+    wait_ms: int = 3000  # how long to wait for the server's diagnostics after an edit
+    warnings: bool = False  # report warnings too, not only errors
+    max_items: int = 10
+    timeout: float = 10.0  # per request (initialize gets at least 30s)
+
+
+@dataclass
 class HookConfig:
     event: str = ""  # session_start | user_prompt | pre_tool | post_tool | stop
     command: str = ""
@@ -204,6 +214,7 @@ class Config:
     context: ContextConfig = field(default_factory=ContextConfig)
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     log: LogConfig = field(default_factory=LogConfig)
+    lsp: LSPConfig = field(default_factory=LSPConfig)
     hooks: list[HookConfig] = field(default_factory=list)
 
     @property

@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 from argus.config import Config, ConfigError, load_config
@@ -89,10 +90,23 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("argus: empty task", file=sys.stderr)
         return 2
     cfg = _config(args)
+    session = None
+    if getattr(args, "cont", False) or getattr(args, "session", None):
+        store = Store(cfg.db_path())
+        try:
+            workspace = cfg.executor.workdir or os.getcwd()
+            session = store.resolve_session(
+                args.session or "last", None if args.session else workspace
+            )
+        except KeyError as e:
+            print(f"argus: {e.args[0]}", file=sys.stderr)
+            return 2
+        finally:
+            store.close()
     reporter = ConsoleReporter(verbose=args.verbose) if not args.quiet else None
     agent = Agent(cfg, reporter=reporter, approver=_approver(args, cfg))
     try:
-        result = agent.run(task)
+        result = agent.run(task, session=session)
     finally:
         agent.close()
     if args.json:
@@ -100,6 +114,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             json.dumps(
                 {
                     "run_id": result.run_id,
+                    "session_id": agent.store.run(result.run_id)["session_id"],
                     "status": result.status,
                     "final": result.final,
                     "turns": result.turns,
@@ -126,6 +141,26 @@ def _approver(args: argparse.Namespace, cfg: Config):
     if cfg.agent.approval in ("ask", "auto") and sys.stdin.isatty() and sys.stderr.isatty():
         return TTYApprover()
     return None
+
+
+def cmd_sessions(args: argparse.Namespace) -> int:
+    store = _store(args)
+    rows = store.sessions(limit=args.limit)
+    if not rows:
+        print("no sessions yet")
+        return 0
+    print(f"{'session':<24}{'runs':>5}  {'updated':<17}{'model':<28}title")
+    for r in rows:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["updated_at"]))
+        model = (r["model"] or "-")[:27]
+        print(f"{r['id']:<24}{r['n_runs']:>5}  {when:<17}{model:<28}{r['title'] or ''}")
+    return 0
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    args.session = args.session_id or None
+    args.cont = not args.session
+    return cmd_run(args)
 
 
 def cmd_runs(args: argparse.Namespace) -> int:
@@ -612,7 +647,35 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument(
         "--plan", action="store_true", help="plan mode: explore read-only, answer with a plan"
     )
+    r.add_argument(
+        "--continue",
+        dest="cont",
+        action="store_true",
+        help="continue the latest session in this workspace (any model)",
+    )
+    r.add_argument("--session", help="continue this session (id prefix)")
     r.set_defaults(fn=cmd_run)
+
+    ss = sub.add_parser("sessions", help="list recent sessions")
+    ss.add_argument("-n", "--limit", type=int, default=20)
+    ss.add_argument("-c", "--config")
+    ss.add_argument("--db")
+    ss.set_defaults(fn=cmd_sessions)
+
+    rs_ = sub.add_parser("resume", help="continue a session: argus resume [SESSION] TASK")
+    rs_.add_argument("session_id", nargs="?", help="session id prefix (default: latest here)")
+    rs_.add_argument("task", nargs="?", help="the next message (or - for stdin)")
+    rs_.add_argument("-f", "--task-file")
+    rs_.add_argument("-w", "--workdir")
+    _add_config_args(rs_)
+    rs_.add_argument("-v", "--verbose", action="store_true")
+    rs_.add_argument("-q", "--quiet", action="store_true")
+    rs_.add_argument("--json", action="store_true")
+    rs_.add_argument("--record", metavar="DIR")
+    rs_.add_argument("--approval", choices=["read-only", "ask", "auto", "full"])
+    rs_.add_argument("-y", "--yes", action="store_true")
+    rs_.add_argument("--plan", action="store_true")
+    rs_.set_defaults(fn=cmd_resume)
 
     ls = sub.add_parser("runs", help="list recent runs")
     ls.add_argument("-n", "--limit", type=int, default=20)

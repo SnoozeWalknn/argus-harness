@@ -67,6 +67,10 @@ class SSHExecutor(Executor):
     def describe(self) -> str:
         return f"ssh:{self.host}:{self.workdir}"
 
+    def process_argv(self, argv: list[str]) -> tuple[list[str], str | None]:
+        remote = f"cd {shlex.quote(self.workdir)} && exec {shlex.join(argv)}"
+        return [*self.ssh, *self.options, self.host, remote], None
+
     # -- transport ---------------------------------------------------------------------------------
 
     def _ssh(

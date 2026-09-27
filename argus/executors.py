@@ -233,6 +233,11 @@ class Executor(ABC):
         refuse it (argus only passes one when the executor supports it).
         """
 
+    def process_argv(self, argv: list[str]) -> tuple[list[str], str | None]:
+        """(argv, cwd) that starts a long-lived process in the workspace (e.g. a language
+        server speaking over stdin/stdout)."""
+        return argv, self.workdir
+
     def has_command(self, name: str) -> bool:
         if name not in self._commands:
             r = self.run(f"command -v {shlex.quote(name)} >/dev/null 2>&1", timeout=15)

@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS batches (
@@ -211,6 +211,29 @@ MIGRATIONS: dict[int, list[str]] = {
         "ALTER TABLE runs ADD COLUMN parent_run_id TEXT",
         "ALTER TABLE runs ADD COLUMN parent_turn INTEGER",
         "CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id)",
+    ],
+    5: [
+        """CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            workspace TEXT,
+            last_run_id TEXT,
+            n_runs INTEGER DEFAULT 0,
+            model TEXT,
+            provider TEXT,
+            protocol TEXT,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )""",
+        "ALTER TABLE runs ADD COLUMN session_id TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id)",
+        # the conversation as it stood at the end of a run, to continue it
+        """CREATE TABLE IF NOT EXISTS contexts (
+            run_id TEXT PRIMARY KEY REFERENCES runs(id),
+            system_prompt TEXT,
+            messages_json TEXT,
+            created_at REAL NOT NULL
+        )""",
     ],
 }
 
@@ -422,6 +445,78 @@ class Store:
         if not rows:
             raise KeyError(run_id)
         return rows[0]
+
+    # -- sessions ----------------------------------------------------------------------------------
+
+    def new_session(self, title: str, workspace: str) -> str:
+        sid = "s" + new_id()
+        now = time.time()
+        with self.lock:
+            self.db.execute(
+                "INSERT INTO sessions (id, title, workspace, created_at, updated_at) "
+                "VALUES (?,?,?,?,?)",
+                (sid, title, workspace, now, now),
+            )
+            self.db.commit()
+        return sid
+
+    def update_session(self, session_id: str, **fields: Any) -> None:
+        fields["updated_at"] = time.time()
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        with self.lock:
+            self.db.execute(
+                f"UPDATE sessions SET {sets}, n_runs = n_runs + 1 WHERE id = ?",
+                [*fields.values(), session_id],
+            )
+            self.db.commit()
+
+    def session(self, session_id: str) -> sqlite3.Row:
+        rows = self.q("SELECT * FROM sessions WHERE id = ?", session_id)
+        if not rows:
+            raise KeyError(session_id)
+        return rows[0]
+
+    def sessions(self, limit: int = 20, workspace: str | None = None) -> list[sqlite3.Row]:
+        if workspace:
+            return self.q(
+                "SELECT * FROM sessions WHERE workspace = ? ORDER BY updated_at DESC LIMIT ?",
+                workspace,
+                limit,
+            )
+        return self.q("SELECT * FROM sessions ORDER BY updated_at DESC LIMIT ?", limit)
+
+    def resolve_session(self, prefix: str, workspace: str | None = None) -> str:
+        if prefix in ("last", "latest", "-"):
+            rows = self.sessions(1, workspace)
+        else:
+            rows = self.q(
+                "SELECT id FROM sessions WHERE id LIKE ? ORDER BY updated_at DESC",
+                "%" + prefix + "%",
+            )
+        if not rows:
+            where = f" for {workspace}" if workspace and prefix in ("last", "latest", "-") else ""
+            raise KeyError(f"no session matching {prefix!r}{where}")
+        return rows[0]["id"]
+
+    def save_context(self, run_id: str, system_prompt: str, entries: list[Any]) -> None:
+        blob = json.dumps([{"id": mid, "message": msg} for mid, msg in entries], default=str)
+        with self.lock:
+            self.db.execute(
+                "INSERT OR REPLACE INTO contexts (run_id, system_prompt, messages_json, created_at) "
+                "VALUES (?,?,?,?)",
+                (run_id, system_prompt, blob, time.time()),
+            )
+            self.db.commit()
+
+    def load_context(self, run_id: str) -> tuple[str, list[tuple[int, dict[str, Any]]]] | None:
+        rows = self.q("SELECT * FROM contexts WHERE run_id = ?", run_id)
+        if not rows:
+            return None
+        entries = [(e["id"], e["message"]) for e in json.loads(rows[0]["messages_json"])]
+        return rows[0]["system_prompt"], entries
+
+    def session_runs(self, session_id: str) -> list[sqlite3.Row]:
+        return self.q("SELECT * FROM runs WHERE session_id = ? ORDER BY started_at", session_id)
 
     def children(self, run_id: str) -> list[sqlite3.Row]:
         return self.q("SELECT * FROM runs WHERE parent_run_id = ? ORDER BY started_at", run_id)
