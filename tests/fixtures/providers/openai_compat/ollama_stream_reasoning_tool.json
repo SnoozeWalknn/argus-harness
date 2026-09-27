@@ -1,0 +1,306 @@
+{
+ "format": 1,
+ "source": "documented",
+ "description": "Ollama's OpenAI-compatible endpoint: reasoning in `reasoning`, the tool call in one chunk",
+ "provider": "openai_compat",
+ "flavor": "ollama",
+ "quirks": [],
+ "model": "qwen3-coder:30b",
+ "stream": true,
+ "canonical": {
+  "model": "qwen3-coder:30b",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "max_tokens": 8192,
+  "thinking": {
+   "enabled": true
+  }
+ },
+ "request": {
+  "method": "POST",
+  "path": "/chat/completions",
+  "body": {
+   "model": "qwen3-coder:30b",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+    },
+    {
+     "role": "user",
+     "content": "test_add fails; fix calc.py"
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "read",
+      "description": "Show a file with line numbers",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "path"
+       ]
+      }
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_tokens": 8192,
+   "think": true,
+   "stream": true,
+   "stream_options": {
+    "include_usage": true
+   }
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "text/event-stream"
+  },
+  "sse": [
+   {
+    "data": {
+     "id": "chatcmpl-417",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder:30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": "",
+        "reasoning": "Need"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "fp_ollama"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-417",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder:30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": "",
+        "reasoning": " to"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "fp_ollama"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-417",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder:30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": "",
+        "reasoning": " read"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "fp_ollama"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-417",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder:30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": "",
+        "reasoning": " calc.py"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "fp_ollama"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-417",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder:30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": "",
+        "reasoning": " first"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "fp_ollama"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-417",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder:30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": "",
+        "reasoning": "."
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "fp_ollama"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-417",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder:30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+         {
+          "id": "call_q1f0x6lm",
+          "index": 0,
+          "type": "function",
+          "function": {
+           "name": "read",
+           "arguments": "{\"path\":\"calc.py\"}"
+          }
+         }
+        ]
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "fp_ollama"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-417",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder:30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": ""
+       },
+       "finish_reason": "tool_calls"
+      }
+     ],
+     "system_fingerprint": "fp_ollama"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-417",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder:30b",
+     "system_fingerprint": "fp_ollama",
+     "choices": [],
+     "usage": {
+      "prompt_tokens": 388,
+      "completion_tokens": 41,
+      "total_tokens": 429
+     }
+    }
+   },
+   {
+    "data": "[DONE]"
+   }
+  ]
+ },
+ "expect": {
+  "content": "",
+  "reasoning": "Need to read calc.py first.",
+  "tool_calls": [
+   [
+    "call_q1f0x6lm",
+    "read",
+    "{\"path\":\"calc.py\"}"
+   ]
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+   "prompt_tokens": 388,
+   "completion_tokens": 41,
+   "total_tokens": 429
+  }
+ }
+}

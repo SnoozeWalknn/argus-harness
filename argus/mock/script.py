@@ -13,7 +13,9 @@ request uses. Step keys (all optional):
 ``thought``           value for the envelope's ``thought`` field (constrained protocols)
 ``raw``               for constrained protocols: exact content, bypassing the envelope
 ``finish_reason``     override
-``error``             ``{"status": int, "message": str, "type": str}`` HTTP error
+``error``             ``{"status": int, "message": str, "type": str, "headers"?: {}}`` HTTP error
+``replay``            a recorded response sent verbatim: ``{"status", "json"}`` or
+                      ``{"status", "sse": [{"event"?, "data"} | {"comment"}]}``
 ``delay``             seconds to wait before responding
 ``chunk_delay``       seconds between streamed chunks
 ``expect``            request assertions (see :func:`check_expect`)

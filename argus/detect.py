@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from argus.llm import Delta, StopGeneration
+from argus.providers.base import Delta, StopGeneration
 
 # -- loops ---------------------------------------------------------------------------------------
 
@@ -117,7 +117,7 @@ class ReasoningBudget:
         self.max = max_tokens
 
     def __call__(self, d: Delta) -> None:
-        if d.kind == "reasoning" and d.completion.reasoning_chunks > self.max:
+        if d.kind == "reasoning" and d.completion.reasoning_tokens > self.max:
             raise StopGeneration("reasoning_budget", f"reasoning exceeded {self.max} tokens")
 
 

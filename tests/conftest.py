@@ -82,6 +82,15 @@ def _isolated_home(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("ARGUS_SHADOW_ROOT", str(tmp_path / "shadow"))
+    for name in (
+        "ARGUS_RECORD",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture

@@ -30,9 +30,10 @@ from argus.fsstate import (
     mass_deletion,
     summarize,
 )
-from argus.llm import Completion, ContextOverflow, Delta, LLMClient, LLMError
 from argus.prompt import PromptParts, base_prompt
 from argus.protocols import Parsed, Protocol, ToolCall, make_protocol
+from argus.providers import Provider, provider_from_config
+from argus.providers.base import Completion, ContextOverflow, Delta, LLMError
 from argus.skills import (
     Skill,
     SkillTool,
@@ -78,6 +79,8 @@ class RunResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     reasoning_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     max_context: int = 0
     wall_ms: float = 0.0
     llm_ms: float = 0.0
@@ -108,14 +111,13 @@ class Agent:
         cfg: Config,
         *,
         executor: Executor | None = None,
-        llm: LLMClient | None = None,
+        llm: Provider | None = None,
         store: Store | None = None,
         reporter: Reporter | None = None,
     ):
         self.cfg = cfg
         self.executor = executor or make_executor(cfg.executor, cfg.tools.capture_bytes)
-        m = cfg.model
-        self.llm = llm or LLMClient(m.base_url, m.api_key, m.timeout, m.connect_timeout, m.retries)
+        self.llm: Provider = llm or provider_from_config(cfg.model)
         self.store = store or Store(cfg.db_path())
         self.reporter = reporter or Reporter()
         self.tools: dict[str, Tool] = build_tools(cfg.tools)
@@ -175,8 +177,15 @@ class Agent:
             value = getattr(m, key)
             if value is not None:
                 body[key] = value
+        thinking: dict[str, Any] = {}
         if m.enable_thinking is not None:
-            body["chat_template_kwargs"] = {"enable_thinking": m.enable_thinking}
+            thinking["enabled"] = m.enable_thinking
+        if m.effort:
+            thinking["effort"] = m.effort
+        if m.thinking_budget:
+            thinking["budget"] = m.thinking_budget
+        if thinking:
+            body["thinking"] = thinking
         return body
 
     def run(
@@ -259,10 +268,11 @@ class _Run:
             variant=self.meta.get("variant"),
             config_name=self.cfg.name,
             config_hash=self.cfg.hash(),
-            config_json=json.dumps(self.cfg.to_dict(), default=str),
+            config_json=json.dumps(self.cfg.to_dict(redact=True), default=str),
             workspace=a.executor.workdir,
             executor=a.executor.describe(),
             protocol=self.protocol.name,
+            provider=a.llm.describe(),
             model=self.cfg.model.model,
         )
         self.rep.run_start(self.id, self.task)
@@ -309,6 +319,8 @@ class _Run:
                 prompt_tokens=r.prompt_tokens,
                 completion_tokens=r.completion_tokens,
                 reasoning_tokens=r.reasoning_tokens,
+                cache_read_tokens=r.cache_read_tokens,
+                cache_write_tokens=r.cache_write_tokens,
                 max_context_tokens=r.max_context,
                 wall_ms=round(r.wall_ms, 1),
                 llm_ms=round(r.llm_ms, 1),
@@ -515,14 +527,21 @@ class _Run:
 
     def record_turn(self, turn: int, c: Completion, p: Parsed, attempt: int = 0) -> None:
         r = self.result
-        # Streamed: one chunk per token. Otherwise count the text with the server's tokenizer.
+        # Reported by the API if it can; else streamed chunks where a chunk is a token;
+        # else the text counted with the server's tokenizer (or estimated).
         count = self.agent.counter.count
-        reasoning_tokens = c.reasoning_chunks or (count(c.reasoning) if c.reasoning else 0)
-        content_tokens = c.content_chunks or (count(c.content) if c.content else 0)
+        reasoning_tokens = c.reported_reasoning_tokens
+        if reasoning_tokens is None:
+            chunks = c.reasoning_chunks if c.token_chunks else 0
+            reasoning_tokens = chunks or (count(c.reasoning) if c.reasoning else 0)
+        chunks = c.content_chunks if c.token_chunks else 0
+        content_tokens = chunks or (count(c.content) if c.content else 0)
         r.turns = turn + 1
         r.prompt_tokens += c.prompt_tokens
         r.completion_tokens += c.completion_tokens
         r.reasoning_tokens += reasoning_tokens
+        r.cache_read_tokens += c.cached_tokens
+        r.cache_write_tokens += c.cache_write_tokens
         r.max_context = max(r.max_context, c.prompt_tokens + c.completion_tokens)
         t = c.timings
         self.store.add_turn(
@@ -532,6 +551,7 @@ class _Run:
             prompt_tokens=c.prompt_tokens,
             completion_tokens=c.completion_tokens,
             cached_tokens=c.cached_tokens,
+            cache_write_tokens=c.cache_write_tokens or None,
             reasoning_tokens=reasoning_tokens,
             content_tokens=content_tokens,
             reasoning=c.reasoning,
@@ -548,6 +568,8 @@ class _Run:
             max_tokens=self.last_max_tokens,
             context_ids=self.last_context_ids,
             raw_response=c.raw,
+            provider=c.provider or None,
+            model=c.model or None,
         )
 
     def feedback(self, turn: int, text: str) -> None:

@@ -1,0 +1,60 @@
+{
+ "format": 1,
+ "source": "documented",
+ "description": "vLLM rejects a prompt that does not fit (top-level error object)",
+ "provider": "openai_compat",
+ "flavor": "vllm",
+ "quirks": [],
+ "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+ "stream": true,
+ "canonical": {
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "max_tokens": 8192
+ },
+ "request": {
+  "method": "POST",
+  "path": "/chat/completions",
+  "body": {
+   "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+    },
+    {
+     "role": "user",
+     "content": "test_add fails; fix calc.py"
+    }
+   ],
+   "max_tokens": 8192,
+   "stream": true,
+   "stream_options": {
+    "include_usage": true
+   }
+  }
+ },
+ "response": {
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "json": {
+   "object": "error",
+   "message": "This model's maximum context length is 32768 tokens. However, you requested 40960 tokens (32768 in the messages, 8192 in the completion). Please reduce the length of the messages or completion.",
+   "type": "BadRequestError",
+   "param": null,
+   "code": 400
+  }
+ },
+ "expect_error": "ContextOverflow"
+}

@@ -1,0 +1,274 @@
+{
+ "format": 1,
+ "source": "documented",
+ "description": "OpenRouter: SSE comment keep-alives, `reasoning` deltas, usage with cost and cached tokens",
+ "provider": "openrouter",
+ "flavor": "openrouter",
+ "quirks": [],
+ "model": "qwen/qwen3-coder",
+ "stream": true,
+ "canonical": {
+  "model": "qwen/qwen3-coder",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "max_tokens": 8192,
+  "thinking": {
+   "effort": "high"
+  }
+ },
+ "request": {
+  "method": "POST",
+  "path": "/chat/completions",
+  "body": {
+   "model": "qwen/qwen3-coder",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+    },
+    {
+     "role": "user",
+     "content": "test_add fails; fix calc.py"
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "read",
+      "description": "Show a file with line numbers",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "path"
+       ]
+      }
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_tokens": 8192,
+   "reasoning": {
+    "effort": "high"
+   },
+   "stream": true,
+   "stream_options": {
+    "include_usage": true
+   }
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "text/event-stream"
+  },
+  "sse": [
+   {
+    "comment": "OPENROUTER PROCESSING"
+   },
+   {
+    "comment": "OPENROUTER PROCESSING"
+   },
+   {
+    "data": {
+     "id": "gen-1758902400-Xk2mPq9LrT",
+     "provider": "Chutes",
+     "model": "qwen/qwen3-coder",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": "",
+        "reasoning": "The",
+        "reasoning_details": [
+         {
+          "type": "reasoning.text",
+          "text": "The",
+          "format": "unknown",
+          "index": 0
+         }
+        ]
+       },
+       "finish_reason": null,
+       "native_finish_reason": null,
+       "logprobs": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "gen-1758902400-Xk2mPq9LrT",
+     "provider": "Chutes",
+     "model": "qwen/qwen3-coder",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": "",
+        "reasoning": " fix is one character.",
+        "reasoning_details": [
+         {
+          "type": "reasoning.text",
+          "text": " fix is one character.",
+          "format": "unknown",
+          "index": 0
+         }
+        ]
+       },
+       "finish_reason": null,
+       "native_finish_reason": null,
+       "logprobs": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "gen-1758902400-Xk2mPq9LrT",
+     "provider": "Chutes",
+     "model": "qwen/qwen3-coder",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": "Done: add() returns a + b."
+       },
+       "finish_reason": null,
+       "native_finish_reason": null,
+       "logprobs": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "gen-1758902400-Xk2mPq9LrT",
+     "provider": "Chutes",
+     "model": "qwen/qwen3-coder",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": ""
+       },
+       "finish_reason": "stop",
+       "native_finish_reason": "stop",
+       "logprobs": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "gen-1758902400-Xk2mPq9LrT",
+     "provider": "Chutes",
+     "model": "qwen/qwen3-coder",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": ""
+       },
+       "finish_reason": null,
+       "native_finish_reason": null,
+       "logprobs": null
+      }
+     ],
+     "usage": {
+      "prompt_tokens": 1210,
+      "completion_tokens": 58,
+      "total_tokens": 1268,
+      "cost": 0.0002884,
+      "is_byok": false,
+      "prompt_tokens_details": {
+       "cached_tokens": 1024
+      },
+      "cost_details": {
+       "upstream_inference_cost": null
+      },
+      "completion_tokens_details": {
+       "reasoning_tokens": 44
+      }
+     }
+    }
+   },
+   {
+    "data": "[DONE]"
+   }
+  ]
+ },
+ "expect": {
+  "content": "Done: add() returns a + b.",
+  "reasoning": "The fix is one character.",
+  "tool_calls": [],
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 1210,
+   "completion_tokens": 58,
+   "total_tokens": 1268,
+   "cost": 0.0002884,
+   "is_byok": false,
+   "prompt_tokens_details": {
+    "cached_tokens": 1024
+   },
+   "cost_details": {
+    "upstream_inference_cost": null
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 44
+   }
+  }
+ }
+}

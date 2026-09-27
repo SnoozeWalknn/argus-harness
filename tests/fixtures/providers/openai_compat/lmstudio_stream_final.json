@@ -1,0 +1,398 @@
+{
+ "format": 1,
+ "source": "documented",
+ "description": "LM Studio streaming a final answer after a tool result",
+ "provider": "openai_compat",
+ "flavor": "lmstudio",
+ "quirks": [],
+ "model": "qwen/qwen3-coder-30b",
+ "stream": true,
+ "canonical": {
+  "model": "qwen/qwen3-coder-30b",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   },
+   {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+     {
+      "id": "123456789",
+      "type": "function",
+      "function": {
+       "name": "read",
+       "arguments": "{\"path\": \"calc.py\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "123456789",
+    "content": "1\tdef add(a, b):\n2\t    return a - b"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "max_tokens": 8192
+ },
+ "request": {
+  "method": "POST",
+  "path": "/chat/completions",
+  "body": {
+   "model": "qwen/qwen3-coder-30b",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+    },
+    {
+     "role": "user",
+     "content": "test_add fails; fix calc.py"
+    },
+    {
+     "role": "assistant",
+     "content": "",
+     "tool_calls": [
+      {
+       "id": "123456789",
+       "type": "function",
+       "function": {
+        "name": "read",
+        "arguments": "{\"path\": \"calc.py\"}"
+       }
+      }
+     ]
+    },
+    {
+     "role": "tool",
+     "tool_call_id": "123456789",
+     "content": "1\tdef add(a, b):\n2\t    return a - b"
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "read",
+      "description": "Show a file with line numbers",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "path"
+       ]
+      }
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_tokens": 8192,
+   "stream": true,
+   "stream_options": {
+    "include_usage": true
+   }
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "text/event-stream"
+  },
+  "sse": [
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": ""
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "content": "Fixed"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "content": " add"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "content": "()"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "content": ":"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "content": " it"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "content": " now"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "content": " returns"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "content": " a"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "content": " +"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "content": " b"
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "content": "."
+       },
+       "finish_reason": null
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {},
+       "finish_reason": "stop"
+      }
+     ],
+     "system_fingerprint": "qwen/qwen3-coder-30b"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-ab12cd34ef",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen/qwen3-coder-30b",
+     "system_fingerprint": "qwen/qwen3-coder-30b",
+     "choices": [],
+     "usage": {
+      "prompt_tokens": 950,
+      "completion_tokens": 12,
+      "total_tokens": 962
+     }
+    }
+   },
+   {
+    "data": "[DONE]"
+   }
+  ]
+ },
+ "expect": {
+  "content": "Fixed add(): it now returns a + b.",
+  "reasoning": "",
+  "tool_calls": [],
+  "finish_reason": "stop",
+  "usage": {
+   "prompt_tokens": 950,
+   "completion_tokens": 12,
+   "total_tokens": 962
+  }
+ }
+}

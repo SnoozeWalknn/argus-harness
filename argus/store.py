@@ -16,7 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS batches (
@@ -175,6 +175,22 @@ CREATE INDEX IF NOT EXISTS idx_failures_tag ON failures(tag);
 """
 
 
+# Applied in order to databases older than the version; SCHEMA above is version 1.
+MIGRATIONS: dict[int, list[str]] = {
+    2: [
+        "ALTER TABLE runs ADD COLUMN provider TEXT",
+        "ALTER TABLE runs ADD COLUMN cache_read_tokens INTEGER DEFAULT 0",
+        "ALTER TABLE runs ADD COLUMN cache_write_tokens INTEGER DEFAULT 0",
+        "ALTER TABLE runs ADD COLUMN cost_usd REAL",
+        "ALTER TABLE turns ADD COLUMN provider TEXT",
+        "ALTER TABLE turns ADD COLUMN model TEXT",
+        "ALTER TABLE turns ADD COLUMN cache_write_tokens INTEGER",
+        "ALTER TABLE turns ADD COLUMN cost_usd REAL",
+        "ALTER TABLE messages ADD COLUMN replay_json TEXT",
+    ],
+}
+
+
 def new_id() -> str:
     return time.strftime("%y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
 
@@ -201,8 +217,18 @@ class Store:
                     f"{self.path} has schema v{version}; this argus knows v{SCHEMA_VERSION}"
                 )
             self.db.executescript(SCHEMA)
+            self._migrate(max(version, 1))
             self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             self.db.commit()
+
+    def _migrate(self, version: int) -> None:
+        for target in range(version + 1, SCHEMA_VERSION + 1):
+            for stmt in MIGRATIONS.get(target, []):
+                try:
+                    self.db.execute(stmt)
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e):
+                        raise
 
     def close(self) -> None:
         with self.lock:
@@ -261,6 +287,7 @@ class Store:
                 "reasoning": msg.get("reasoning_content"),
                 "tool_calls_json": _j(msg.get("tool_calls")),
                 "tool_call_id": msg.get("tool_call_id"),
+                "replay_json": _j(msg.get("replay")),
                 "kind": kind,
             },
         )

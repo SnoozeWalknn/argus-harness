@@ -3,9 +3,20 @@
 #   argus run "..." -c argus.toml -o agent.protocol='"grammar"' -o model.temperature=0.2
 
 [model]
-base_url = "http://127.0.0.1:8080/v1"   # llama-server started with --jinja
+# provider: auto (decided by base_url's host) | openai_compat (flavour detected) |
+#   llama_server | ollama | vllm | lmstudio | openrouter | anthropic | openai | gemini
+# `-m provider/model` on the command line sets provider and model, e.g.
+#   -m anthropic/claude-opus-5   -m ollama/qwen3-coder:30b   -m openrouter/qwen/qwen3-coder
+provider = "auto"
+base_url = "http://127.0.0.1:8080/v1"   # llama-server started with --jinja ("" = provider default)
 model = "qwen"
-# api_key = ""                          # if llama-server runs with --api-key
+# API keys come from the environment: ANTHROPIC_API_KEY, OPENAI_API_KEY,
+# GEMINI_API_KEY (or GOOGLE_API_KEY), OPENROUTER_API_KEY. They are never logged.
+# api_key_env = "MY_VLLM_KEY"           # read the key from another variable
+# effort = "high"                       # reasoning effort, where the API has one
+# thinking_budget = 0                   # reasoning token budget, where the API takes one
+# quirks = []                           # e.g. ["no_sampling", "max_completion_tokens"]
+# record_dir = ""                       # save every API exchange as a fixture (or --record)
 # Sampling: unset values are left to llama-server's own defaults.
 # Qwen3 thinking: temperature 0.6, top_p 0.95, top_k 20, min_p 0
 # Qwen3-Coder:    temperature 0.7, top_p 0.8,  top_k 20, repeat_penalty 1.05
@@ -16,7 +27,7 @@ min_p = 0.0
 max_tokens = 8192          # per-turn generation cap
 context_window = 0         # 0 = ask the server (/props)
 stream = true              # needed for the reasoning-budget / repetition monitors
-# enable_thinking = true   # sets chat_template_kwargs.enable_thinking
+# enable_thinking = true   # thinking on/off (llama-server: chat_template_kwargs.enable_thinking)
 timeout = 600.0
 retries = 2
 # extra_body = { cache_prompt = true }   # merged into every request
@@ -75,6 +86,7 @@ threshold = 0.75           # of the context window
 keep_last_turns = 4
 mask = true                # stage 1: elide old tool output
 summarize = true           # stage 2: summarise with the small model
+provider = "auto"
 base_url = "http://127.0.0.1:8081/v1"   # second llama-server with a small model
 model = "qwen-small"
 max_tokens = 1024

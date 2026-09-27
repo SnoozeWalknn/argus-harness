@@ -8,8 +8,8 @@ import sys
 from typing import Any, TextIO
 
 from argus.agent import Reporter, RunResult, brief_args
-from argus.llm import Completion, Delta
 from argus.protocols import Parsed, ToolCall
+from argus.providers.base import Completion, Delta
 from argus.tools import ToolResult
 
 

@@ -1,0 +1,473 @@
+{
+ "format": 1,
+ "source": "documented",
+ "description": "llama-server (--jinja) streaming a Qwen3 reasoning block and one native tool call",
+ "provider": "openai_compat",
+ "flavor": "llama_server",
+ "quirks": [],
+ "model": "qwen3-coder",
+ "stream": true,
+ "canonical": {
+  "model": "qwen3-coder",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "max_tokens": 8192,
+  "temperature": 0.7,
+  "top_k": 20,
+  "thinking": {
+   "enabled": true
+  }
+ },
+ "request": {
+  "method": "POST",
+  "path": "/chat/completions",
+  "body": {
+   "model": "qwen3-coder",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+    },
+    {
+     "role": "user",
+     "content": "test_add fails; fix calc.py"
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "read",
+      "description": "Show a file with line numbers",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "path"
+       ]
+      }
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_tokens": 8192,
+   "temperature": 0.7,
+   "top_k": 20,
+   "chat_template_kwargs": {
+    "enable_thinking": true
+   },
+   "stream": true,
+   "stream_options": {
+    "include_usage": true
+   }
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "text/event-stream"
+  },
+  "sse": [
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": null
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "reasoning_content": "The"
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "reasoning_content": " test"
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "reasoning_content": " expects"
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "reasoning_content": " addition"
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "reasoning_content": "."
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "tool_calls": [
+         {
+          "index": 0,
+          "id": "tWz2VYr1XbJ0Qk8H",
+          "type": "function",
+          "function": {
+           "name": "read",
+           "arguments": ""
+          }
+         }
+        ]
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "tool_calls": [
+         {
+          "index": 0,
+          "function": {
+           "arguments": "{\""
+          }
+         }
+        ]
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "tool_calls": [
+         {
+          "index": 0,
+          "function": {
+           "arguments": "path"
+          }
+         }
+        ]
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "tool_calls": [
+         {
+          "index": 0,
+          "function": {
+           "arguments": "\":"
+          }
+         }
+        ]
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "tool_calls": [
+         {
+          "index": 0,
+          "function": {
+           "arguments": " \""
+          }
+         }
+        ]
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "tool_calls": [
+         {
+          "index": 0,
+          "function": {
+           "arguments": "calc"
+          }
+         }
+        ]
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "tool_calls": [
+         {
+          "index": 0,
+          "function": {
+           "arguments": ".py"
+          }
+         }
+        ]
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "tool_calls": [
+         {
+          "index": 0,
+          "function": {
+           "arguments": "\"}"
+          }
+         }
+        ]
+       },
+       "finish_reason": null
+      }
+     ]
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [
+      {
+       "index": 0,
+       "delta": {},
+       "finish_reason": "tool_calls"
+      }
+     ],
+     "timings": {
+      "cache_n": 0,
+      "prompt_n": 412,
+      "prompt_ms": 180.2,
+      "prompt_per_second": 2286.3,
+      "predicted_n": 24,
+      "predicted_ms": 310.5,
+      "predicted_per_second": 77.3
+     }
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-3x9FqkTz",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "qwen3-coder",
+     "choices": [],
+     "usage": {
+      "completion_tokens": 24,
+      "prompt_tokens": 412,
+      "total_tokens": 436
+     },
+     "timings": {
+      "cache_n": 0,
+      "prompt_n": 412,
+      "prompt_ms": 180.2,
+      "prompt_per_second": 2286.3,
+      "predicted_n": 24,
+      "predicted_ms": 310.5,
+      "predicted_per_second": 77.3
+     }
+    }
+   },
+   {
+    "data": "[DONE]"
+   }
+  ]
+ },
+ "expect": {
+  "content": "",
+  "reasoning": "The test expects addition.",
+  "tool_calls": [
+   [
+    "tWz2VYr1XbJ0Qk8H",
+    "read",
+    "{\"path\": \"calc.py\"}"
+   ]
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+   "completion_tokens": 24,
+   "prompt_tokens": 412,
+   "total_tokens": 436
+  }
+ }
+}

@@ -1,0 +1,153 @@
+{
+ "format": 1,
+ "source": "documented",
+ "description": "vLLM with a reasoning parser, not streamed",
+ "provider": "openai_compat",
+ "flavor": "vllm",
+ "quirks": [],
+ "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+ "stream": false,
+ "canonical": {
+  "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "max_tokens": 4096,
+  "thinking": {
+   "enabled": true
+  }
+ },
+ "request": {
+  "method": "POST",
+  "path": "/chat/completions",
+  "body": {
+   "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+    },
+    {
+     "role": "user",
+     "content": "test_add fails; fix calc.py"
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "read",
+      "description": "Show a file with line numbers",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "path"
+       ]
+      }
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_tokens": 4096,
+   "chat_template_kwargs": {
+    "enable_thinking": true
+   },
+   "stream": false
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "json": {
+   "id": "chatcmpl-9f2c1d7e8a",
+   "object": "chat.completion",
+   "created": 1758902400,
+   "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+   "choices": [
+    {
+     "index": 0,
+     "message": {
+      "role": "assistant",
+      "content": null,
+      "reasoning_content": "Read the file before editing.",
+      "tool_calls": [
+       {
+        "id": "chatcmpl-tool-5b1e0c",
+        "type": "function",
+        "function": {
+         "name": "read",
+         "arguments": "{\"path\": \"calc.py\"}"
+        }
+       }
+      ]
+     },
+     "logprobs": null,
+     "finish_reason": "tool_calls",
+     "stop_reason": null
+    }
+   ],
+   "usage": {
+    "prompt_tokens": 401,
+    "total_tokens": 431,
+    "completion_tokens": 30,
+    "prompt_tokens_details": null
+   },
+   "prompt_logprobs": null
+  }
+ },
+ "expect": {
+  "content": "",
+  "reasoning": "Read the file before editing.",
+  "tool_calls": [
+   [
+    "chatcmpl-tool-5b1e0c",
+    "read",
+    "{\"path\": \"calc.py\"}"
+   ]
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+   "prompt_tokens": 401,
+   "total_tokens": 431,
+   "completion_tokens": 30,
+   "prompt_tokens_details": null
+  }
+ }
+}

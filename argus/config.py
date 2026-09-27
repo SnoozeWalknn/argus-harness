@@ -24,9 +24,13 @@ class ConfigError(ValueError):
 
 @dataclass
 class ModelConfig:
-    base_url: str = "http://127.0.0.1:8080/v1"
+    # auto (by base_url host) | openai_compat | llama_server | ollama | vllm | lmstudio |
+    # openrouter | anthropic | openai | gemini
+    provider: str = "auto"
+    base_url: str = ""  # "" = the provider's default (llama-server: http://127.0.0.1:8080/v1)
     model: str = "qwen"
-    api_key: str = ""
+    api_key: str = ""  # prefer api_key_env or the provider's standard variable; never logged
+    api_key_env: str = ""  # environment variable holding the key (default: the provider's)
     # Sampling: None leaves the value to llama-server's own defaults.
     temperature: float | None = None
     top_p: float | None = None
@@ -44,6 +48,11 @@ class ModelConfig:
     connect_timeout: float = 5.0
     retries: int = 2
     extra_body: dict[str, Any] = field(default_factory=dict)
+    effort: str = ""  # reasoning effort where the API has one (low | medium | high | ...)
+    thinking_budget: int = 0  # reasoning token budget where the API takes one
+    cache: bool = True  # request prompt caching where the API needs it asked for
+    quirks: list[str] = field(default_factory=list)  # named request adjustments, see profiles
+    record_dir: str = ""  # save every API exchange here as a fixture (also $ARGUS_RECORD)
 
 
 @dataclass
@@ -138,9 +147,11 @@ class CompactionConfig:
     keep_last_turns: int = 4  # recent turns never masked or summarised
     mask: bool = True  # stage 1: replace old tool outputs with stubs
     summarize: bool = True  # stage 2: summarise the middle with the small model
+    provider: str = "auto"
     base_url: str = "http://127.0.0.1:8081/v1"
     model: str = "qwen-small"
     api_key: str = ""
+    api_key_env: str = ""
     max_tokens: int = 1024
     timeout: float = 120.0
 
@@ -163,12 +174,17 @@ class Config:
     compaction: CompactionConfig = field(default_factory=CompactionConfig)
     log: LogConfig = field(default_factory=LogConfig)
 
-    def to_dict(self) -> dict[str, Any]:
-        return dataclasses.asdict(self)
+    def to_dict(self, redact: bool = False) -> dict[str, Any]:
+        d = dataclasses.asdict(self)
+        if redact:
+            for section in ("model", "compaction"):
+                if d[section].get("api_key"):
+                    d[section]["api_key"] = "<redacted>"
+        return d
 
     def hash(self) -> str:
-        """Stable hash of everything except the display name."""
-        d = self.to_dict()
+        """Stable hash of everything except the display name and secrets."""
+        d = self.to_dict(redact=True)
         d.pop("name", None)
         blob = json.dumps(d, sort_keys=True, default=str).encode()
         return hashlib.sha256(blob).hexdigest()[:12]
@@ -278,6 +294,11 @@ def apply_override(cfg: Config, override: str) -> None:
 
 
 def validate(cfg: Config) -> Config:
+    from argus.providers import PROVIDERS
+
+    for where, value in (("model", cfg.model.provider), ("compaction", cfg.compaction.provider)):
+        if value not in PROVIDERS:
+            raise ConfigError(f"{where}.provider must be one of {PROVIDERS}, got {value!r}")
     if cfg.agent.protocol not in PROTOCOLS:
         raise ConfigError(f"agent.protocol must be one of {PROTOCOLS}, got {cfg.agent.protocol!r}")
     if cfg.executor.kind not in EXECUTORS:

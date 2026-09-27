@@ -20,10 +20,28 @@ def _config(args: argparse.Namespace) -> Config:
     workdir = getattr(args, "workdir", None)
     if workdir:
         overrides.append(f"executor.workdir={json.dumps(workdir)}")
+    spec = getattr(args, "model", None)
+    if spec:
+        overrides[:0] = model_overrides(spec)  # explicit -o still wins
+    if getattr(args, "record", None):
+        overrides.append(f"model.record_dir={json.dumps(args.record)}")
     cfg = load_config(getattr(args, "config", None), overrides)
     if workdir and cfg.executor.kind == "local":  # an SSH workdir is a path on the remote host
         cfg.executor.workdir = str(Path(workdir).resolve())
     return cfg
+
+
+def model_overrides(spec: str) -> list[str]:
+    """``-m anthropic/claude-opus-5`` → provider and model overrides."""
+    from argus.providers import parse_spec
+
+    provider, model = parse_spec(spec)
+    out = []
+    if provider:
+        out.append(f"model.provider={json.dumps(provider)}")
+    if model:
+        out.append(f"model.model={json.dumps(model)}")
+    return out
 
 
 def _store(args: argparse.Namespace) -> Store:
@@ -35,6 +53,12 @@ def _store(args: argparse.Namespace) -> Store:
 
 def _add_config_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("-c", "--config", help="TOML config file")
+    p.add_argument(
+        "-m",
+        "--model",
+        metavar="SPEC",
+        help="model as provider/model, e.g. anthropic/claude-opus-5, ollama/qwen3-coder:30b",
+    )
     p.add_argument(
         "-o",
         "--override",
@@ -117,15 +141,13 @@ def cmd_show(args: argparse.Namespace) -> int:
 def cmd_overhead(args: argparse.Namespace) -> int:
     from argus.agent import Agent
     from argus.config import PROTOCOLS, apply_override
-    from argus.llm import LLMClient
+    from argus.providers import provider_from_config
     from argus.tokens import TokenCounter, format_overhead, measure
 
     cfg = _config(args)
     protocols = PROTOCOLS if args.all else [cfg.agent.protocol]
-    m = cfg.model
-    llm = (
-        None if args.offline else LLMClient(m.base_url, m.api_key, m.timeout, m.connect_timeout, 0)
-    )
+    cfg.model.retries = 0
+    llm = None if args.offline else provider_from_config(cfg.model)
     counter = TokenCounter(llm)  # shared, so every protocol is measured the same way
     rows = []
     for proto in protocols:
@@ -355,8 +377,10 @@ def cmd_ab(args: argparse.Namespace) -> int:
 
     suite = load_suite(args.suite)
     common = list(args.override or [])
-    cfg_a = load_config(args.config_a, common + list(args.override_a or []))
-    cfg_b = load_config(args.config_b, common + list(args.override_b or []))
+    spec_a = model_overrides(args.model_a) if args.model_a else []
+    spec_b = model_overrides(args.model_b) if args.model_b else []
+    cfg_a = load_config(args.config_a, spec_a + common + list(args.override_a or []))
+    cfg_b = load_config(args.config_b, spec_b + common + list(args.override_b or []))
     if args.db:
         cfg_a.log.db = cfg_b.log.db = args.db
     label_a, label_b = args.label_a or cfg_a.name, args.label_b or cfg_b.name
@@ -421,7 +445,7 @@ def _add_batch_args(p: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="argus", description="Headless coding-agent harness for llama-server."
+        prog="argus", description="Model-agnostic, headless coding agent and measurement harness."
     )
     sub = p.add_subparsers(dest="command", required=True)
 
@@ -433,6 +457,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("-v", "--verbose", action="store_true", help="stream reasoning and content")
     r.add_argument("-q", "--quiet", action="store_true", help="no progress output")
     r.add_argument("--json", action="store_true", help="print a JSON result on stdout")
+    r.add_argument("--record", metavar="DIR", help="save every model API exchange as a fixture")
     r.set_defaults(fn=cmd_run)
 
     ls = sub.add_parser("runs", help="list recent runs")
@@ -486,6 +511,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ab.add_argument("--oa", "--override-a", dest="override_a", action="append", metavar="KEY=VALUE")
     ab.add_argument("--ob", "--override-b", dest="override_b", action="append", metavar="KEY=VALUE")
+    ab.add_argument("--ma", "--model-a", dest="model_a", metavar="SPEC", help="model for A")
+    ab.add_argument("--mb", "--model-b", dest="model_b", metavar="SPEC", help="model for B")
     ab.add_argument("--label-a")
     ab.add_argument("--label-b")
     ab.add_argument("--db")

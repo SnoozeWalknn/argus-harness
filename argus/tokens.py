@@ -14,7 +14,7 @@ import math
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from argus.llm import LLMClient
+from argus.providers.base import Provider
 
 if TYPE_CHECKING:
     from argus.agent import Agent
@@ -27,7 +27,7 @@ def estimate(text: str) -> int:
 
 
 class TokenCounter:
-    def __init__(self, llm: LLMClient | None):
+    def __init__(self, llm: Provider | None):
         self.llm = llm
         self.method = "server" if llm is not None else "estimate"
         self.error: str | None = None

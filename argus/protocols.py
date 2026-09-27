@@ -18,7 +18,7 @@ from typing import Any
 
 from argus import schema as js
 from argus.config import AgentConfig
-from argus.llm import Completion
+from argus.providers.base import Completion
 from argus.tools.base import Tool
 
 
@@ -140,7 +140,7 @@ class Protocol:
         return {"role": "user", "content": text}
 
     def disable_thinking(self) -> dict[str, Any]:
-        return {"chat_template_kwargs": {"enable_thinking": False}}
+        return {"thinking": {"enabled": False}}
 
 
 class NativeProtocol(Protocol):
@@ -198,6 +198,8 @@ class NativeProtocol(Protocol):
             ]
         if self.cfg.keep_reasoning and c.reasoning:
             msg["reasoning_content"] = c.reasoning
+        if c.replay:
+            msg["replay"] = c.replay
         return msg
 
     def result_message(self, call: ToolCall, text: str) -> dict[str, Any]:

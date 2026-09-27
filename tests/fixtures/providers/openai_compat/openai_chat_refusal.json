@@ -1,0 +1,110 @@
+{
+ "format": 1,
+ "source": "documented",
+ "description": "OpenAI Chat Completions: a refusal arrives in `message.refusal` with finish_reason stop",
+ "provider": "openai_compat",
+ "flavor": "generic",
+ "quirks": [
+  "max_completion_tokens",
+  "no_sampling"
+ ],
+ "model": "gpt-5-mini",
+ "stream": false,
+ "canonical": {
+  "model": "gpt-5-mini",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "max_tokens": 16000
+ },
+ "request": {
+  "method": "POST",
+  "path": "/chat/completions",
+  "body": {
+   "model": "gpt-5-mini",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+    },
+    {
+     "role": "user",
+     "content": "test_add fails; fix calc.py"
+    }
+   ],
+   "max_completion_tokens": 16000,
+   "stream": false
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "json": {
+   "id": "chatcmpl-CKr01",
+   "object": "chat.completion",
+   "created": 1758902400,
+   "model": "gpt-5-mini-2025-08-07",
+   "choices": [
+    {
+     "index": 0,
+     "message": {
+      "role": "assistant",
+      "content": null,
+      "refusal": "I can't help with that.",
+      "annotations": []
+     },
+     "logprobs": null,
+     "finish_reason": "stop"
+    }
+   ],
+   "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 9,
+    "total_tokens": 129,
+    "prompt_tokens_details": {
+     "cached_tokens": 0,
+     "audio_tokens": 0
+    },
+    "completion_tokens_details": {
+     "reasoning_tokens": 0,
+     "audio_tokens": 0,
+     "accepted_prediction_tokens": 0,
+     "rejected_prediction_tokens": 0
+    }
+   },
+   "service_tier": "default",
+   "system_fingerprint": null
+  }
+ },
+ "expect": {
+  "content": "",
+  "reasoning": "",
+  "tool_calls": [],
+  "finish_reason": "refusal",
+  "refusal": "I can't help with that.",
+  "usage": {
+   "prompt_tokens": 120,
+   "completion_tokens": 9,
+   "total_tokens": 129,
+   "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "audio_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 0,
+    "audio_tokens": 0,
+    "accepted_prediction_tokens": 0,
+    "rejected_prediction_tokens": 0
+   }
+  }
+ }
+}

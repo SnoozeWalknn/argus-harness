@@ -1,8 +1,11 @@
-"""A scripted, OpenAI-compatible stand-in for llama-server.
+"""A scripted stand-in for model servers and APIs.
 
-Implements ``/v1/chat/completions`` (streaming and not), ``/tokenize``,
-``/apply-template``, ``/props``, ``/health`` and ``/v1/models``. Responses come
-from a :class:`~argus.mock.script.Script`. Generation honours ``max_tokens``
+Imitates llama-server by default: ``/v1/chat/completions`` (streaming and not),
+``/tokenize``, ``/apply-template``, ``/props``, ``/health`` and ``/v1/models``.
+With ``flavor=`` it imitates the discovery endpoints and chat details of
+Ollama, vLLM, LM Studio, OpenRouter or a generic OpenAI-compatible server.
+A step with ``replay`` sends a recorded response verbatim (fixture tests).
+Responses come from a :class:`~argus.mock.script.Script`. Generation honours ``max_tokens``
 and the context size (``finish_reason = "length"``), simulates KV-cache reuse
 (``timings.cache_n``), stops when the client disconnects, and checks that
 constrained output actually satisfies the request's schema or grammar.
@@ -23,6 +26,7 @@ from typing import Any
 from argus.mock.script import Script, Step, check_expect, request_protocol
 
 TOKEN_RE = re.compile(r"\s+|\w+|[^\w\s]")
+FLAVORS = ("llama_server", "ollama", "vllm", "lmstudio", "openrouter", "generic")
 
 
 def tokenize(text: str) -> list[str]:
@@ -107,14 +111,22 @@ class MockServer:
         model: str = "mock-qwen",
         chunk_delay: float = 0.0,
         strict: bool = True,
+        flavor: str = "llama_server",
+        num_ctx: int | None = None,
     ):
+        if flavor not in FLAVORS:
+            raise ValueError(f"unknown mock flavor {flavor!r}; choose from {', '.join(FLAVORS)}")
         self.script = script if isinstance(script, Script) else Script(script or [])
+        self.flavor = flavor  # which OpenAI-compatible server to imitate
+        self.num_ctx = num_ctx  # ollama: the model's num_ctx parameter, if set
         self.n_ctx = n_ctx
         self.host = host
         self.model = model
         self.chunk_delay = chunk_delay
         self.strict = strict  # validate constrained output against the request
-        self.requests: list[dict[str, Any]] = []
+        self.requests: list[dict[str, Any]] = []  # as received (wire format)
+        self.canonical_requests: list[dict[str, Any]] = []  # as OpenAI chat requests
+        self.paths: list[str] = []  # request path of each generation request
         self.responses: list[dict[str, Any]] = []
         self.errors: list[str] = []  # failed expectations / invalid scripted output
         self.aborted = 0  # streams closed by the client mid-generation
@@ -133,8 +145,17 @@ class MockServer:
         return self.httpd.server_address[1]
 
     @property
+    def root(self) -> str:
+        return f"http://{self.host}:{self.port}"
+
+    @property
     def url(self) -> str:
-        return f"http://{self.host}:{self.port}/v1"
+        """Base URL for the OpenAI-compatible API of the imitated flavour."""
+        return f"{self.root}/api/v1" if self.flavor == "openrouter" else f"{self.root}/v1"
+
+    @property
+    def reasoning_field(self) -> str:
+        return "reasoning" if self.flavor in ("ollama", "openrouter") else "reasoning_content"
 
     def start(self) -> MockServer:
         self._thread = threading.Thread(target=self.httpd.serve_forever, args=(0.05,), daemon=True)
@@ -265,6 +286,22 @@ class MockServer:
             g.tool_calls = []
         return g, pieces, generated
 
+    def record_response(
+        self, g: _Gen, pieces: list[tuple[str, Any]], usage: dict[str, Any]
+    ) -> dict[str, Any]:
+        record = {
+            "reasoning": "".join(p for k, p in pieces if k == "reasoning"),
+            "content": "".join(p for k, p in pieces if k == "content"),
+            "tool_calls": [
+                {"name": tc["name"], "arguments": tc["arguments"]} for tc in g.tool_calls
+            ],
+            "finish_reason": g.finish_reason,
+            "usage": usage,
+        }
+        with self._lock:
+            self.responses.append(record)
+        return record
+
     def cache_hit(self, prompt: list[int]) -> int:
         with self._lock:
             n = 0
@@ -289,16 +326,26 @@ class _Handler(BaseHTTPRequestHandler):
 
     # -- plumbing ----------------------------------------------------------------------------
 
-    def _json(self, status: int, obj: Any) -> None:
+    def _json(self, status: int, obj: Any, headers: dict[str, str] | None = None) -> None:
         data = json.dumps(obj).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        for k, v in (headers or {}).items():
+            self.send_header(k, str(v))
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
-    def _error(self, status: int, message: str, type_: str = "server_error", **extra: Any) -> None:
-        self._json(status, {"error": {"code": status, "message": message, "type": type_, **extra}})
+    def _error(
+        self,
+        status: int,
+        message: str,
+        type_: str = "server_error",
+        headers: dict[str, str] | None = None,
+        **extra: Any,
+    ) -> None:
+        body = {"error": {"code": status, "message": message, "type": type_, **extra}}
+        self._json(status, body, headers)
 
     def _body(self) -> dict[str, Any]:
         n = int(self.headers.get("Content-Length") or 0)
@@ -308,32 +355,63 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = self.path.split("?")[0].rstrip("/")
         m = self.mock
-        if path in ("/health", "/v1/health"):
+        f = m.flavor
+        if path in ("/health", "/v1/health") and f in ("llama_server", "vllm"):
             self._json(200, {"status": "ok"})
-        elif path in ("/props", "/v1/props"):
+        elif path in ("/props", "/v1/props") and f == "llama_server":
             self._json(
                 200,
                 {
                     "default_generation_settings": {"n_ctx": m.n_ctx, "params": {}},
                     "total_slots": 1,
                     "model_path": f"/models/{m.model}.gguf",
-                    "chat_template": "chatml (argus mock)",
+                    "chat_template": "chatml (argus mock) with tools and <think>",
                     "build_info": "argus-mock",
                 },
             )
-        elif path in ("/v1/models", "/models"):
-            self._json(200, {"object": "list", "data": [{"id": m.model, "object": "model"}]})
+        elif path == "/api/version" and f == "ollama":
+            self._json(200, {"version": "0.12.3"})
+        elif path == "/api/v0/models" and f == "lmstudio":
+            row = {
+                "id": m.model,
+                "object": "model",
+                "type": "llm",
+                "state": "loaded",
+                "max_context_length": max(m.n_ctx, 131072),
+                "loaded_context_length": m.n_ctx,
+            }
+            self._json(200, {"object": "list", "data": [row]})
+        elif path == "/api/v1/models" and f == "openrouter":
+            row = {
+                "id": m.model,
+                "name": m.model,
+                "context_length": m.n_ctx,
+                "pricing": {
+                    "prompt": "0.0000002",
+                    "completion": "0.0000008",
+                    "input_cache_read": "0.00000005",
+                },
+                "supported_parameters": ["tools", "reasoning", "response_format", "temperature"],
+                "top_provider": {"context_length": m.n_ctx, "max_completion_tokens": 16384},
+            }
+            self._json(200, {"data": [row]})
+        elif path in ("/v1/models", "/models") and f != "openrouter":
+            row: dict[str, Any] = {"id": m.model, "object": "model", "owned_by": "argus-mock"}
+            if f == "vllm":
+                row["max_model_len"] = m.n_ctx
+            self._json(200, {"object": "list", "data": [row]})
         else:
             self._error(404, f"no route {path}", "not_found_error")
 
     def do_POST(self) -> None:
         path = self.path.split("?")[0].rstrip("/")
+        f = self.mock.flavor
         try:
             body = self._body()
         except json.JSONDecodeError as e:
             self._error(400, f"invalid JSON body: {e}", "invalid_request_error")
             return
-        if path in ("/tokenize", "/v1/tokenize"):
+        if path in ("/tokenize", "/v1/tokenize") and f == "llama_server":
             text = body.get("content", "")
             if body.get("with_pieces"):
                 self._json(
@@ -347,46 +425,133 @@ class _Handler(BaseHTTPRequestHandler):
                 )
             else:
                 self._json(200, {"tokens": token_ids(text)})
-        elif path in ("/apply-template", "/v1/apply-template"):
+        elif path in ("/apply-template", "/v1/apply-template") and f == "llama_server":
             self._json(200, {"prompt": render_chatml(body)})
-        elif path in ("/v1/chat/completions", "/chat/completions"):
+        elif path == "/api/show" and f == "ollama":
+            m = self.mock
+            params = f"num_ctx                        {m.num_ctx}" if m.num_ctx else ""
+            self._json(
+                200,
+                {
+                    "parameters": params,
+                    "model_info": {
+                        "general.architecture": "qwen3",
+                        "qwen3.context_length": m.n_ctx,
+                    },
+                    "capabilities": ["completion", "tools", "thinking"],
+                },
+            )
+        elif path in ("/v1/chat/completions", "/chat/completions", "/api/v1/chat/completions"):
             self._chat(body)
         else:
             self._error(404, f"no route {path}", "not_found_error")
 
-    # -- chat ----------------------------------------------------------------------------------
+    # -- generation, shared by every wire format ------------------------------------------------
 
-    def _chat(self, req: dict[str, Any]) -> None:
+    def _take_step(self, req: dict[str, Any], canonical: dict[str, Any]) -> Step | None:
+        """Record the request, then take the next step unless the prompt overflows.
+
+        Returns None when a response (an error) has already been sent.
+        """
         m = self.mock
-        with m._lock:
-            m.requests.append(req)
-        # An oversized prompt is rejected before the model "generates" (no step consumed).
-        prompt = m.prompt_tokens(req)
-        if len(prompt) > m.n_ctx:
-            self._error(
-                400,
-                "the request exceeds the available context size, try increasing it",
-                "exceed_context_size_error",
-                n_prompt_tokens=len(prompt),
-                n_ctx=m.n_ctx,
-            )
-            return
-        step = m.script.next(req, m)
+        self._log_request(req, canonical)
+        step = m.script.next(canonical, m)
+        if step.get("replay"):
+            return step
         if step.get("expect"):
-            problems = check_expect(step["expect"], req)
+            problems = check_expect(step["expect"], canonical)
             if problems:
                 msg = "mock expectation failed: " + "; ".join(problems)
                 m.errors.append(msg)
                 self._error(500, msg, "mock_error")
-                return
+                return None
         if step.get("delay"):
             time.sleep(float(step["delay"]))
+        return step
+
+    def _log_request(self, req: dict[str, Any], canonical: dict[str, Any]) -> None:
+        m = self.mock
+        with m._lock:
+            m.requests.append(req)
+            m.canonical_requests.append(canonical)
+            m.paths.append(self.path.split("?")[0])
+
+    def _replay(self, rec: dict[str, Any]) -> None:
+        """Send a recorded response verbatim: a JSON body or a list of SSE events."""
+        status = int(rec.get("status", 200))
+        if "sse" not in rec:
+            body = rec.get("json")
+            data = (body if isinstance(body, str) else json.dumps(body)).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            for k, v in (rec.get("headers") or {}).items():
+                if k.lower() not in ("content-type", "content-length"):
+                    self.send_header(k, v)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        self.send_response(status)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+        try:
+            for ev in rec["sse"]:
+                if "comment" in ev:
+                    self.wfile.write(f": {ev['comment']}\n\n".encode())
+                    continue
+                data = ev.get("data")
+                text = data if isinstance(data, str) else json.dumps(data)
+                head = f"event: {ev['event']}\n" if ev.get("event") else ""
+                self.wfile.write(f"{head}data: {text}\n\n".encode())
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            with self.mock._lock:
+                self.mock.aborted += 1
+
+    def _overflow(self, n_prompt: int) -> None:
+        m = self.mock
+        if m.flavor in ("vllm", "openrouter", "generic", "lmstudio"):
+            self._error(
+                400,
+                f"This model's maximum context length is {m.n_ctx} tokens. However, your "
+                f"messages resulted in {n_prompt} tokens. Please reduce the length of the messages.",
+                "invalid_request_error",
+                param="messages",
+            )
+            return
+        self._error(
+            400,
+            "the request exceeds the available context size, try increasing it",
+            "exceed_context_size_error",
+            n_prompt_tokens=n_prompt,
+            n_ctx=m.n_ctx,
+        )
+
+    # -- chat completions ----------------------------------------------------------------------
+
+    def _chat(self, req: dict[str, Any]) -> None:
+        m = self.mock
+        # An oversized prompt is rejected before the model "generates" (no step consumed).
+        prompt = m.prompt_tokens(req)
+        if len(prompt) > m.n_ctx:
+            self._log_request(req, req)
+            self._overflow(len(prompt))
+            return
+        step = self._take_step(req, req)
+        if step is None:
+            return
+        if step.get("replay"):
+            self._replay(step["replay"])
+            return
         if step.get("error"):
             e = step["error"]
             self._error(
                 int(e.get("status", 500)),
                 e.get("message", "mock error"),
                 e.get("type", "server_error"),
+                headers=e.get("headers"),
             )
             return
         cache_n = m.cache_hit(prompt)
@@ -400,50 +565,44 @@ class _Handler(BaseHTTPRequestHandler):
             "predicted_ms": n_gen * 1.0,
             "predicted_per_second": 1000.0,
         }
-        usage = {
+        usage: dict[str, Any] = {
             "prompt_tokens": len(prompt),
             "completion_tokens": n_gen,
             "total_tokens": len(prompt) + n_gen,
             "prompt_tokens_details": {"cached_tokens": cache_n},
         }
-        record = {
-            "reasoning": "".join(p for k, p in pieces if k == "reasoning"),
-            "content": "".join(p for k, p in pieces if k == "content"),
-            "tool_calls": [
-                {"name": tc["name"], "arguments": tc["arguments"]} for tc in g.tool_calls
-            ],
-            "finish_reason": g.finish_reason,
-            "usage": usage,
-        }
-        with m._lock:
-            m.responses.append(record)
+        if m.flavor == "openrouter":
+            usage["cost"] = round(len(prompt) * 2e-7 + n_gen * 8e-7, 8)
+        if m.flavor != "llama_server":
+            timings = {}
+        m.record_response(g, pieces, usage)
         if req.get("stream"):
             self._stream(req, step, g, pieces, usage, timings)
-        else:
-            message: dict[str, Any] = {"role": "assistant", "content": record["content"] or None}
-            if record["reasoning"]:
-                message["reasoning_content"] = record["reasoning"]
-            if g.tool_calls:
-                message["tool_calls"] = [
-                    {
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": tc["arguments"]},
-                    }
-                    for tc in g.tool_calls
-                ]
-            self._json(
-                200,
+            return
+        record = m.responses[-1]
+        message: dict[str, Any] = {"role": "assistant", "content": record["content"] or None}
+        if record["reasoning"]:
+            message[m.reasoning_field] = record["reasoning"]
+        if g.tool_calls:
+            message["tool_calls"] = [
                 {
-                    "id": f"chatcmpl-{next(m._counter)}",
-                    "object": "chat.completion",
-                    "created": int(time.time()),
-                    "model": req.get("model", m.model),
-                    "choices": [{"index": 0, "message": message, "finish_reason": g.finish_reason}],
-                    "usage": usage,
-                    "timings": timings,
-                },
-            )
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": tc["arguments"]},
+                }
+                for tc in g.tool_calls
+            ]
+        out: dict[str, Any] = {
+            "id": f"chatcmpl-{next(m._counter)}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": req.get("model", m.model),
+            "choices": [{"index": 0, "message": message, "finish_reason": g.finish_reason}],
+            "usage": usage,
+        }
+        if timings:
+            out["timings"] = timings
+        self._json(200, out)
 
     def _stream(
         self,
@@ -479,12 +638,14 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         try:
+            if m.flavor == "openrouter":
+                self.wfile.write(b": OPENROUTER PROCESSING\n\n")
             send(chunk({"role": "assistant", "content": None}))
             for kind, piece in pieces:
                 if delay:
                     time.sleep(delay)
                 if kind == "reasoning":
-                    send(chunk({"reasoning_content": piece}))
+                    send(chunk({m.reasoning_field: piece}))
                 elif kind == "content":
                     send(chunk({"content": piece}))
                 else:
@@ -495,7 +656,8 @@ class _Handler(BaseHTTPRequestHandler):
                         entry.update(id=tc["id"], type="function")
                         fn["name"] = tc["name"]
                     send(chunk({"tool_calls": [entry]}))
-            send(chunk({}, g.finish_reason, timings=timings))
+            extra = {"timings": timings} if timings else {}
+            send(chunk({}, g.finish_reason, **extra))
             if (req.get("stream_options") or {}).get("include_usage"):
                 send(
                     {
@@ -503,7 +665,7 @@ class _Handler(BaseHTTPRequestHandler):
                         "object": "chat.completion.chunk",
                         "choices": [],
                         "usage": usage,
-                        "timings": timings,
+                        **extra,
                     }
                 )
             self.wfile.write(b"data: [DONE]\n\n")

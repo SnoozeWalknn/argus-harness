@@ -21,7 +21,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from argus.config import CompactionConfig
-from argus.llm import LLMClient, LLMError
+from argus.providers import Provider, make_provider
+from argus.providers.base import LLMError
 from argus.tokens import TokenCounter
 
 HEAD = 2  # system prompt + task
@@ -152,9 +153,18 @@ class Compactor:
     def __init__(self, cfg: CompactionConfig, counter: TokenCounter):
         self.cfg = cfg
         self.counter = counter
-        self.llm: LLMClient | None = None
+        self.llm: Provider | None = None
         if cfg.summarize:
-            self.llm = LLMClient(cfg.base_url, cfg.api_key, cfg.timeout, 5.0, retries=0)
+            self.llm = make_provider(
+                cfg.provider,
+                base_url=cfg.base_url,
+                model=cfg.model,
+                api_key=cfg.api_key,
+                api_key_env=cfg.api_key_env,
+                timeout=cfg.timeout,
+                retries=0,
+                require_key=False,  # a missing key fails the summary; argus then drops instead
+            )
 
     def close(self) -> None:
         if self.llm:
@@ -195,7 +205,7 @@ class Compactor:
             ],
             "max_tokens": self.cfg.max_tokens,
             "temperature": 0.2,
-            "chat_template_kwargs": {"enable_thinking": False},
+            "thinking": {"enabled": False},
         }
         c = self.llm.chat(body, stream=False)
         summary = c.content.strip()

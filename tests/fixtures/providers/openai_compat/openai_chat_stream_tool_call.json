@@ -1,0 +1,292 @@
+{
+ "format": 1,
+ "source": "documented",
+ "description": "OpenAI Chat Completions through the compatible adapter: max_completion_tokens, no sampling, reasoning_effort",
+ "provider": "openai_compat",
+ "flavor": "generic",
+ "quirks": [
+  "max_completion_tokens",
+  "no_sampling"
+ ],
+ "model": "gpt-5-mini",
+ "stream": true,
+ "canonical": {
+  "model": "gpt-5-mini",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+   },
+   {
+    "role": "user",
+    "content": "test_add fails; fix calc.py"
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Show a file with line numbers",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": true,
+  "max_tokens": 16000,
+  "temperature": 0.2,
+  "thinking": {
+   "effort": "medium"
+  }
+ },
+ "request": {
+  "method": "POST",
+  "path": "/chat/completions",
+  "body": {
+   "model": "gpt-5-mini",
+   "messages": [
+    {
+     "role": "system",
+     "content": "You are a coding agent working in /work/calc. When the task is done, reply with a short summary and no tool call."
+    },
+    {
+     "role": "user",
+     "content": "test_add fails; fix calc.py"
+    }
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "function": {
+      "name": "read",
+      "description": "Show a file with line numbers",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "path"
+       ]
+      }
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_completion_tokens": 16000,
+   "reasoning_effort": "medium",
+   "stream": true,
+   "stream_options": {
+    "include_usage": true
+   }
+  }
+ },
+ "response": {
+  "status": 200,
+  "headers": {
+   "content-type": "text/event-stream"
+  },
+  "sse": [
+   {
+    "data": {
+     "id": "chatcmpl-CKq8zV3nLr0Ym2D",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "gpt-5-mini-2025-08-07",
+     "service_tier": "default",
+     "system_fingerprint": null,
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null
+       },
+       "logprobs": null,
+       "finish_reason": null
+      }
+     ],
+     "obfuscation": "Qx"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-CKq8zV3nLr0Ym2D",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "gpt-5-mini-2025-08-07",
+     "service_tier": "default",
+     "system_fingerprint": null,
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "tool_calls": [
+         {
+          "index": 0,
+          "id": "call_Z3Jp9qVxG2wN5bT8",
+          "type": "function",
+          "function": {
+           "name": "read",
+           "arguments": ""
+          }
+         }
+        ]
+       },
+       "logprobs": null,
+       "finish_reason": null
+      }
+     ],
+     "obfuscation": "Qx"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-CKq8zV3nLr0Ym2D",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "gpt-5-mini-2025-08-07",
+     "service_tier": "default",
+     "system_fingerprint": null,
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "tool_calls": [
+         {
+          "index": 0,
+          "function": {
+           "arguments": "{\"path\""
+          }
+         }
+        ]
+       },
+       "logprobs": null,
+       "finish_reason": null
+      }
+     ],
+     "obfuscation": "Qx"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-CKq8zV3nLr0Ym2D",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "gpt-5-mini-2025-08-07",
+     "service_tier": "default",
+     "system_fingerprint": null,
+     "choices": [
+      {
+       "index": 0,
+       "delta": {
+        "tool_calls": [
+         {
+          "index": 0,
+          "function": {
+           "arguments": ":\"calc.py\"}"
+          }
+         }
+        ]
+       },
+       "logprobs": null,
+       "finish_reason": null
+      }
+     ],
+     "obfuscation": "Qx"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-CKq8zV3nLr0Ym2D",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "gpt-5-mini-2025-08-07",
+     "service_tier": "default",
+     "system_fingerprint": null,
+     "choices": [
+      {
+       "index": 0,
+       "delta": {},
+       "logprobs": null,
+       "finish_reason": "tool_calls"
+      }
+     ],
+     "obfuscation": "Qx"
+    }
+   },
+   {
+    "data": {
+     "id": "chatcmpl-CKq8zV3nLr0Ym2D",
+     "object": "chat.completion.chunk",
+     "created": 1758902400,
+     "model": "gpt-5-mini-2025-08-07",
+     "service_tier": "default",
+     "system_fingerprint": null,
+     "choices": [],
+     "usage": {
+      "prompt_tokens": 1450,
+      "completion_tokens": 210,
+      "total_tokens": 1660,
+      "prompt_tokens_details": {
+       "cached_tokens": 1280,
+       "audio_tokens": 0
+      },
+      "completion_tokens_details": {
+       "reasoning_tokens": 192,
+       "audio_tokens": 0,
+       "accepted_prediction_tokens": 0,
+       "rejected_prediction_tokens": 0
+      }
+     },
+     "obfuscation": "a1"
+    }
+   },
+   {
+    "data": "[DONE]"
+   }
+  ]
+ },
+ "expect": {
+  "content": "",
+  "reasoning": "",
+  "tool_calls": [
+   [
+    "call_Z3Jp9qVxG2wN5bT8",
+    "read",
+    "{\"path\":\"calc.py\"}"
+   ]
+  ],
+  "finish_reason": "tool_calls",
+  "usage": {
+   "prompt_tokens": 1450,
+   "completion_tokens": 210,
+   "total_tokens": 1660,
+   "prompt_tokens_details": {
+    "cached_tokens": 1280,
+    "audio_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 192,
+    "audio_tokens": 0,
+    "accepted_prediction_tokens": 0,
+    "rejected_prediction_tokens": 0
+   }
+  }
+ }
+}
