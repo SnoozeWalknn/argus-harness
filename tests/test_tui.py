@@ -392,3 +392,22 @@ def test_updates_while_a_modal_is_open(mock, workspace, db_path):
             assert any("thinking under a modal" in t for t in texts(app, ".reasoning"))
 
     run(go())
+
+
+def test_diagnostics_are_always_in_the_preview(mock, workspace, db_path):
+    server = mock([])
+    app = ArgusApp(factory(server, workspace, db_path))
+    result = "Edited calc.py (lines 2-2).\n" + "\n".join(f"{n}\tline" for n in range(1, 12))
+    result += '\n[pyright reports after this edit:\ncalc.py:2:12 error: "c" is not defined]'
+
+    async def go():
+        async with app.run_test(size=(140, 40)) as pilot:
+            app.on_agent_tool_start("", "edit", "path=calc.py")
+            app.on_agent_tool_end("", "edit", True, result, 3.0, None)
+            await pilot.pause(0.05)
+            (shown,) = texts(app, ".tool")
+            assert "⚠ pyright after this edit:" in shown
+            assert 'calc.py:2:12 error: "c" is not defined' in shown
+            assert "more lines" in shown  # the snippet is cut, the findings are not
+
+    run(go())

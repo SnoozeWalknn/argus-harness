@@ -41,6 +41,8 @@ from argus.tui import themes
 from argus.tui.live import Meter, constrained_view
 
 CHANGED = re.compile(r"\[files changed: (.*?)\]")
+# how the agent appends language-server findings to an edit's result
+DIAGNOSTICS = re.compile(r"\n\[(\S+) reports after this edit:\n(.*?)\]\s*$", re.S)
 
 COMMANDS = {
     "/model": "switch model: /model opus, /model ollama/qwen3-coder:30b (no argument: pick)",
@@ -514,10 +516,20 @@ class ArgusApp(App):
     ) -> None:
         widget, head = self.tools.pop() if self.tools else (self.add_line("", "tool"), name)
         mark = "✓" if ok else "✗"
-        lines = text.strip().splitlines()
-        preview = "\n".join(f"    {ln}" for ln in lines[:6])
-        more = f"\n    … {len(lines) - 6} more lines" if len(lines) > 6 else ""
-        widget.update(Text(f"{head} {mark} ({ms:.0f}ms)\n{preview}{more}"))
+        found = DIAGNOSTICS.search(text.strip())
+        body = text.strip()[: found.start()] if found else text
+        diagnostics = found.group(2) if found else ""
+        lines = body.strip().splitlines()
+        keep = 4 if diagnostics else 6
+        preview = "\n".join(f"    {ln}" for ln in lines[:keep])
+        more = f"\n    … {len(lines) - keep} more lines" if len(lines) > keep else ""
+        shown = Text(f"{head} {mark} ({ms:.0f}ms)\n{preview}{more}")
+        if diagnostics:  # what the language server found: always shown
+            warn = str(self.current_theme.warning or "yellow")
+            shown.append(f"\n    ⚠ {found.group(1)} after this edit:", style=f"bold {warn}")
+            for ln in diagnostics.strip().splitlines()[:5]:
+                shown.append(f"\n      {ln}", style=warn)
+        widget.update(shown)
         widget.set_class(not ok, "tool-fail")
         self.meter.phase = "waiting"
         files = [self.relative(path)] if path else []
